@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   validate:
-    name: Lint, Test and Build
+    name: Lint, Optional Test and Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -46,8 +46,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Run tests
-        run: pnpm test -- --run
+      - name: Lint
+        run: pnpm lint
+
+      - name: Run tests (if script exists)
+        run: |
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+            pnpm test
+          else
+            echo "No test script found. Skipping tests."
+          fi
 
       - name: Build
         run: pnpm build

@@ -1,5 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Outfit:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
 :root {
-  --font-main: "Space Grotesk", "Segoe UI", sans-serif;
+  --font-main: "Manrope", "Segoe UI", sans-serif;
+  --font-display: "Outfit", "Segoe UI", sans-serif;
+  --font-code: "JetBrains Mono", "Consolas", monospace;
   --radius-xl: 22px;
   --radius-lg: 16px;
   --radius-md: 12px;
@@ -69,6 +73,8 @@ body {
     radial-gradient(55% 65% at 50% 100%, color-mix(in srgb, var(--primary) 12%, transparent), transparent),
     var(--bg);
   font-family: var(--font-main);
+  line-height: 1.55;
+  letter-spacing: 0.01em;
 }
 
 button,
@@ -121,6 +127,9 @@ select {
 .brand h1 {
   margin: 0;
   font-size: 2rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .brand p {
@@ -183,6 +192,7 @@ select {
   padding: 0.5rem 0.8rem;
   cursor: pointer;
   transition: transform 140ms ease, filter 140ms ease, box-shadow 140ms ease;
+  font-weight: 600;
 }
 
 .btn,
@@ -295,6 +305,8 @@ select {
 
 .feed-head h2 {
   margin: 0;
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
 }
 
 .filters {
@@ -428,6 +440,8 @@ textarea {
 
 .entry h3 {
   margin: 0.3rem 0 0;
+  font-family: var(--font-display);
+  font-weight: 600;
 }
 
 .entry-meta {
@@ -469,6 +483,9 @@ pre {
   border-radius: var(--radius-md);
   padding: 0.58rem;
   background: color-mix(in srgb, var(--bg) 40%, var(--bg-3));
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .entry-image {

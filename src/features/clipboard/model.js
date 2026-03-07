@@ -42,7 +42,9 @@ export function normalizeItem(item = {}, defaults = {}) {
     collectionId: item.collectionId || '',
     pinned: Boolean(item.pinned || details.favorite),
     copyCount: Number(item.copyCount || 0),
-    sensitive: item.sensitive ?? false
+    sensitive: item.sensitive ?? false,
+    pendingSync: Boolean(item.pendingSync),
+    lastSyncError: item.lastSyncError || ''
   };
 }
 
@@ -63,4 +65,3 @@ export function mergeById(localItems = [], cloudItems = []) {
     (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
   );
 }
-

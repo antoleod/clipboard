@@ -1,52 +1,56 @@
-import { useState, useEffect } from 'react';
-import { useAuth } from '../components/AuthProvider';
+import { useCallback, useMemo, useState } from 'react';
+import { useAuth } from './useAuth';
+
+function resolveInitialValue(initialValue) {
+    return typeof initialValue === 'function' ? initialValue() : initialValue;
+}
+
+function readLocalStorageValue(key, initialValue) {
+    const fallback = resolveInitialValue(initialValue);
+    if (key === null) return fallback;
+
+    try {
+        const jsonValue = window.localStorage.getItem(key);
+        return jsonValue !== null ? JSON.parse(jsonValue) : fallback;
+    } catch (error) {
+        console.error(`Error reading localStorage key "${key}":`, error);
+        return fallback;
+    }
+}
 
 export function useLocalStorage(baseKey, initialValue) {
     const { user } = useAuth();
-
-    // Create a user-specific key. If no user, the key is null, and we won't interact with localStorage.
     const key = user ? `${baseKey}-${user.uid}` : null;
 
-    const [value, setValue] = useState(() => {
-        if (key === null) {
-            return typeof initialValue === 'function' ? initialValue() : initialValue;
-        }
-        try {
-            const jsonValue = window.localStorage.getItem(key);
-            if (jsonValue !== null) {
-                return JSON.parse(jsonValue);
-            }
-            return typeof initialValue === 'function' ? initialValue() : initialValue;
-        } catch (error) {
-            console.error(`Error reading localStorage key "${key}":`, error);
-            return typeof initialValue === 'function' ? initialValue() : initialValue;
-        }
-    });
+    const [state, setState] = useState(() => ({
+        key,
+        value: readLocalStorageValue(key, initialValue)
+    }));
 
-    // When the user logs in or out, the `key` will change.
-    // This effect will re-read the value from localStorage for the new user.
-    useEffect(() => {
-        if (key === null) {
-            // Handle user logout: you might want to reset to initialValue
-            setValue(typeof initialValue === 'function' ? initialValue() : initialValue);
-            return;
-        }
-        const jsonValue = window.localStorage.getItem(key);
-        const newValue = jsonValue !== null ? JSON.parse(jsonValue) : (typeof initialValue === 'function' ? initialValue() : initialValue);
-        setValue(newValue);
-    }, [key]);
+    const value = useMemo(
+        () => (state.key === key ? state.value : readLocalStorageValue(key, initialValue)),
+        [state.key, state.value, key, initialValue]
+    );
 
-    useEffect(() => {
-        // Only write to localStorage if there is a valid key (a logged-in user).
-        if (key === null) {
-            return;
-        }
-        try {
-            window.localStorage.setItem(key, JSON.stringify(value));
-        } catch (error) {
-            console.error(`Error setting localStorage key "${key}":`, error);
-        }
-    }, [key, value]);
+    const setValue = useCallback(
+        (nextValue) => {
+            setState((prev) => {
+                const currentValue = prev.key === key ? prev.value : readLocalStorageValue(key, initialValue);
+                const resolvedNext = typeof nextValue === 'function' ? nextValue(currentValue) : nextValue;
+
+                if (key !== null) {
+                    try {
+                        window.localStorage.setItem(key, JSON.stringify(resolvedNext));
+                    } catch (error) {
+                        console.error(`Error setting localStorage key "${key}":`, error);
+                    }
+                }
+
+                return { key, value: resolvedNext };
+            });
+        },
+        [key, initialValue]
+    );
 
     return [value, setValue];
 }

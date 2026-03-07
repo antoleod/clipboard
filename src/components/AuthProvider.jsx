@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
     configureAuthPersistence,
     getUserProfile,
@@ -6,10 +6,7 @@ import {
     onAuthStateChange,
     saveKeepSignedInPreference
 } from '../services/authService';
-
-const AuthContext = createContext();
-
-export const useAuth = () => useContext(AuthContext);
+import { AuthContext } from './authContext';
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);

@@ -4,7 +4,6 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -103,13 +102,9 @@ export function watchAccessibleClipboardItems(user, onItems, onError) {
     return () => {};
   }
 
-  const ownQ = query(collection(db, ITEMS_COLLECTION), where('ownerId', '==', user.uid), orderBy('updatedAt', 'desc'));
+  const ownQ = query(collection(db, ITEMS_COLLECTION), where('ownerId', '==', user.uid));
   const sharedEmail = (user.email || '').toLowerCase();
-  const sharedQ = query(
-    collection(db, ITEMS_COLLECTION),
-    where('sharedWith', 'array-contains', sharedEmail),
-    orderBy('updatedAt', 'desc')
-  );
+  const sharedQ = query(collection(db, ITEMS_COLLECTION), where('sharedWith', 'array-contains', sharedEmail));
 
   let ownItems = [];
   let sharedItems = [];

@@ -4,7 +4,7 @@ import { RegisterPage } from '../pages/RegisterPage';
 import { ForgotPasswordPage } from '../pages/ForgotPasswordPage';
 import '../styles/Auth.css';
 import { Logo } from './Logo';
-import { useAuth } from './AuthProvider';
+import { useAuth } from '../hooks/useAuth';
 
 export const AuthFlow = () => {
     const [view, setView] = useState('login'); // 'login', 'register', 'forgot'
@@ -39,3 +39,4 @@ export const AuthFlow = () => {
         </div>
     );
 };
+

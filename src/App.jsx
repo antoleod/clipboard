@@ -1,4 +1,4 @@
-import { useAuth } from './components/AuthProvider';
+import { useAuth } from './hooks/useAuth';
 import { AuthFlow } from './components/AuthFlow';
 import ClipboardApp from './components/ClipboardApp';
 
@@ -20,3 +20,4 @@ function App() {
 }
 
 export default App;
+
