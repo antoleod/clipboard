@@ -1,6 +1,6 @@
 import { useAuth } from './hooks/useAuth';
 import { AuthFlow } from './components/AuthFlow';
-import ClipboardApp from './components/ClipboardApp';
+import ClipboardApp from './components/ClipboardAppPro';
 
 function App() {
   const { user, loading } = useAuth();

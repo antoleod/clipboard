@@ -1,4 +1,5 @@
 import { detectContentType } from './contentIntelligence';
+import { normalizeClipboardText, quickHashText } from '../../utils/hash';
 
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -20,13 +21,21 @@ export function defaultDetails() {
 export function normalizeItem(item = {}, defaults = {}) {
   const createdAt = item.createdAt || new Date().toISOString();
   const content = item.content ?? '';
+  const kind = item.kind || 'text';
+  const normalizedText = kind === 'text' ? normalizeClipboardText(content) : '';
   const details = { ...defaultDetails(), ...(item.details || {}) };
   const contentType = item.contentType || detectContentType(item);
+  const usageCount = Number(item.usageCount ?? item.copyCount ?? 0);
+  const contentHash =
+    item.contentHash ||
+    (kind === 'text'
+      ? quickHashText(normalizedText)
+      : quickHashText(`${kind}:${String(item.preview || content).slice(0, 120)}`));
   return {
     id: item.id || makeId(),
-    kind: item.kind || 'text',
-    content,
-    preview: item.preview || String(content).slice(0, 120),
+    kind,
+    content: kind === 'text' ? normalizedText : content,
+    preview: item.preview || String(kind === 'text' ? normalizedText : content).slice(0, 120),
     createdAt,
     updatedAt: item.updatedAt || createdAt,
     source: item.source || 'manual',
@@ -41,7 +50,11 @@ export function normalizeItem(item = {}, defaults = {}) {
     sharedBy: item.sharedBy || defaults.sharedBy || '',
     collectionId: item.collectionId || '',
     pinned: Boolean(item.pinned || details.favorite),
-    copyCount: Number(item.copyCount || 0),
+    copyCount: usageCount,
+    usageCount,
+    contentHash,
+    lastCopiedAt: item.lastCopiedAt || item.updatedAt || createdAt,
+    archived: Boolean(item.archived),
     sensitive: item.sensitive ?? false,
     pendingSync: Boolean(item.pendingSync),
     lastSyncError: item.lastSyncError || ''
@@ -59,9 +72,39 @@ export function createItemFromText(value, source = 'manual') {
 
 export function mergeById(localItems = [], cloudItems = []) {
   const map = new Map();
-  for (const item of localItems) map.set(item.id, item);
-  for (const item of cloudItems) map.set(item.id, item);
+
+  function keyFor(item) {
+    return item.contentHash ? `hash:${item.contentHash}` : `id:${item.id}`;
+  }
+
+  function takeMostRecent(current, incoming) {
+    const currentTs = new Date(current.lastCopiedAt || current.updatedAt || current.createdAt).getTime();
+    const incomingTs = new Date(incoming.lastCopiedAt || incoming.updatedAt || incoming.createdAt).getTime();
+    const latest = incomingTs >= currentTs ? incoming : current;
+    const previous = incomingTs >= currentTs ? current : incoming;
+    return {
+      ...previous,
+      ...latest,
+      pinned: Boolean(current.pinned || incoming.pinned),
+      archived: Boolean(latest.archived),
+      pendingSync: latest.scope === 'local' ? Boolean(latest.pendingSync || previous.pendingSync) : false,
+      usageCount: Math.max(Number(current.usageCount || current.copyCount || 0), Number(incoming.usageCount || incoming.copyCount || 0)),
+      copyCount: Math.max(
+        Number(current.copyCount || current.usageCount || 0),
+        Number(incoming.copyCount || incoming.usageCount || 0)
+      )
+    };
+  }
+
+  for (const item of [...cloudItems, ...localItems]) {
+    const key = keyFor(item);
+    const existing = map.get(key);
+    map.set(key, existing ? takeMostRecent(existing, item) : item);
+  }
+
   return [...map.values()].sort(
-    (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+    (a, b) =>
+      new Date(b.lastCopiedAt || b.updatedAt || b.createdAt).getTime() -
+      new Date(a.lastCopiedAt || a.updatedAt || a.createdAt).getTime()
   );
 }

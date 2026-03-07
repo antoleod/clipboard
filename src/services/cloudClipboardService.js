@@ -21,23 +21,30 @@ function normalizeEmails(values = []) {
 
 function fromDoc(snapshot, scopeFallback = 'synced') {
   const data = snapshot.data();
+  const usageCount = Number(data.usageCount ?? data.copyCount ?? 0);
   return {
     id: snapshot.id,
     ...data,
+    usageCount,
+    copyCount: usageCount,
     createdAt:
       typeof data.createdAt === 'string' ? data.createdAt : data.createdAt?.toDate?.().toISOString?.() || new Date().toISOString(),
     updatedAt:
       typeof data.updatedAt === 'string' ? data.updatedAt : data.updatedAt?.toDate?.().toISOString?.() || new Date().toISOString(),
+    lastCopiedAt:
+      typeof data.lastCopiedAt === 'string' ? data.lastCopiedAt : data.lastCopiedAt?.toDate?.().toISOString?.() || '',
     scope: data.scope || scopeFallback
   };
 }
 
 function toCloudPayload(item, user, overrides = {}) {
+  const usageCount = Number(item.usageCount ?? item.copyCount ?? 0);
   return {
     content: item.content ?? '',
     preview: item.preview ?? '',
     kind: item.kind ?? 'text',
     contentType: item.contentType ?? 'plain',
+    contentHash: item.contentHash || '',
     details: item.details ?? {},
     source: item.source ?? 'manual',
     ownerId: user.uid,
@@ -49,7 +56,10 @@ function toCloudPayload(item, user, overrides = {}) {
     collectionId: overrides.collectionId || item.collectionId || '',
     scope: overrides.scope || item.scope || 'synced',
     pinned: Boolean(item.pinned),
-    copyCount: Number(item.copyCount || 0),
+    archived: Boolean(item.archived),
+    usageCount,
+    copyCount: usageCount,
+    lastCopiedAt: item.lastCopiedAt || serverTimestamp(),
     updatedAt: serverTimestamp(),
     createdAt: item.createdAt ? item.createdAt : serverTimestamp()
   };

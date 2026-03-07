@@ -1,0 +1,84 @@
+/* 
+  Theme System
+  Usage: <html data-theme="midnight"> 
+*/
+
+:root {
+    --transition-speed: 0.3s;
+}
+
+/* 1. Midnight Vault (Default) */
+[data-theme="midnight"] {
+    --bg-primary: #0b0f16;
+    --bg-secondary: #151a23;
+    --text-primary: #ffffff;
+    --text-secondary: #8b9bb4;
+    --accent: #00f0ff;
+    /* Cyan Glow */
+    --border: #1f293a;
+    --card-bg: #111620;
+    --status-success: #00ff9d;
+}
+
+/* 2. EP Dark Blue (European Parliament) */
+[data-theme="ep-blue"] {
+    --bg-primary: #003399;
+    --bg-secondary: #002266;
+    --text-primary: #ffffff;
+    --text-secondary: #ccddee;
+    --accent: #ffcc00;
+    /* Gold */
+    --border: #3355aa;
+    --card-bg: #002b80;
+    --status-success: #44dd88;
+}
+
+/* 3. Matrix Green */
+[data-theme="matrix"] {
+    --bg-primary: #000000;
+    --bg-secondary: #0d0d0d;
+    --text-primary: #00ff00;
+    --text-secondary: #008f11;
+    --accent: #00ff00;
+    /* Neon Green */
+    --border: #003300;
+    --card-bg: #050505;
+    --status-success: #00ff00;
+}
+
+/* 4. Slate Graphite */
+[data-theme="slate"] {
+    --bg-primary: #1a1a1a;
+    --bg-secondary: #252525;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --accent: #ffffff;
+    /* Minimalist White */
+    --border: #333333;
+    --card-bg: #202020;
+    --status-success: #76c7c0;
+}
+
+/* 5. Arctic Dark */
+[data-theme="arctic"] {
+    --bg-primary: #2c3e50;
+    --bg-secondary: #34495e;
+    --text-primary: #ecf0f1;
+    --text-secondary: #bdc3c7;
+    --accent: #3498db;
+    /* Blue */
+    --border: #465c71;
+    --card-bg: #304255;
+    --status-success: #2ecc71;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color var(--transition-speed), color var(--transition-speed);
+}
+
+.card {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border);
+}

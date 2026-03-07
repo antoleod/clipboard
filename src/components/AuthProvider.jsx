@@ -22,6 +22,10 @@ export const AuthProvider = ({ children }) => {
     }, [keepSignedIn]);
 
     useEffect(() => {
+        const fallbackTimer = window.setTimeout(() => {
+            setLoading(false);
+        }, 5000);
+
         const unsubscribe = onAuthStateChange(async (nextUser) => {
             setUser(nextUser);
             if (nextUser?.uid) {
@@ -38,7 +42,10 @@ export const AuthProvider = ({ children }) => {
         });
 
         // Cleanup subscription on unmount
-        return () => unsubscribe();
+        return () => {
+            window.clearTimeout(fallbackTimer);
+            unsubscribe();
+        };
     }, []);
 
     const value = { user, profile, loading, keepSignedIn, setKeepSignedIn };
