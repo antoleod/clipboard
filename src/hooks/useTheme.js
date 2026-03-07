@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+﻿import { useLayoutEffect } from 'react';
+import { applyThemeToDocument } from '../features/theme/themeSystem';
 
-export const useTheme = (theme) => {
-    useEffect(() => {
-        document.documentElement.setAttribute('data-theme', theme || 'midnight-vault');
-    }, [theme]);
+export const useTheme = (themeId, themeMode = 'dark', customThemeOverrides = {}) => {
+  useLayoutEffect(() => {
+    applyThemeToDocument({ themeId, themeMode, customThemeOverrides });
+  }, [themeId, themeMode, customThemeOverrides]);
 };

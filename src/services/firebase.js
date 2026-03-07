@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { disableNetwork, enableNetwork, getFirestore, setLogLevel } from 'firebase/firestore';
 import { getAnalytics } from 'firebase/analytics';
 
 function hasPlaceholder(value = '') {
@@ -47,6 +47,27 @@ const app = initializeApp(firebaseConfig);
 // Export the necessary Firebase services
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+setLogLevel('error');
+
+if (typeof window !== 'undefined') {
+  const syncFirestoreNetworkState = async () => {
+    try {
+      if (navigator.onLine) {
+        await enableNetwork(db);
+      } else {
+        await disableNetwork(db);
+      }
+    } catch {
+      // Ignore transient network toggling errors.
+    }
+  };
+
+  window.addEventListener('online', syncFirestoreNetworkState);
+  window.addEventListener('offline', syncFirestoreNetworkState);
+  if (!navigator.onLine) {
+    syncFirestoreNetworkState();
+  }
+}
 
 // Initialize Analytics. For GDPR/privacy, this could be made conditional.
 if (typeof window !== 'undefined' && firebaseConfig.measurementId && !hasPlaceholder(firebaseConfig.measurementId)) {

@@ -44,6 +44,7 @@ function toCloudPayload(item, user, overrides = {}) {
     preview: item.preview ?? '',
     kind: item.kind ?? 'text',
     contentType: item.contentType ?? 'plain',
+    typeTags: Array.isArray(item.typeTags) ? item.typeTags : [],
     contentHash: item.contentHash || '',
     details: item.details ?? {},
     source: item.source ?? 'manual',

@@ -181,3 +181,23 @@ export const getUserProfile = async (uid) => {
     const snapshot = await getDoc(userRef);
     return snapshot.exists() ? snapshot.data() : null;
 };
+
+export const loadUserPreferences = async (uid) => {
+    const userRef = doc(db, `users/${uid}`);
+    const snapshot = await getDoc(userRef);
+    if (!snapshot.exists()) return null;
+    const profile = snapshot.data() || {};
+    return profile.preferences || null;
+};
+
+export const saveUserPreferences = async (uid, preferences) => {
+    const userRef = doc(db, `users/${uid}`);
+    await setDoc(
+        userRef,
+        {
+            preferences: preferences || {},
+            updatedAt: serverTimestamp()
+        },
+        { merge: true }
+    );
+};

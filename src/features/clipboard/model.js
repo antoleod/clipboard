@@ -1,4 +1,4 @@
-import { detectContentType } from './contentIntelligence';
+import { classifyClipboardContent, detectContentType } from './contentIntelligence';
 import { normalizeClipboardText, quickHashText } from '../../utils/hash';
 
 function makeId() {
@@ -24,7 +24,16 @@ export function normalizeItem(item = {}, defaults = {}) {
   const kind = item.kind || 'text';
   const normalizedText = kind === 'text' ? normalizeClipboardText(content) : '';
   const details = { ...defaultDetails(), ...(item.details || {}) };
-  const contentType = item.contentType || detectContentType(item);
+  const classification = classifyClipboardContent({
+    ...item,
+    kind,
+    content: kind === 'text' ? normalizedText : content
+  });
+  const rawContentType = item.contentType || classification.primaryType || detectContentType(item);
+  const contentType = rawContentType === 'plain' ? 'text' : rawContentType;
+  const typeTags = Array.isArray(item.typeTags) && item.typeTags.length
+    ? [...new Set(item.typeTags)]
+    : classification.secondaryTypes;
   const usageCount = Number(item.usageCount ?? item.copyCount ?? 0);
   const contentHash =
     item.contentHash ||
@@ -41,6 +50,7 @@ export function normalizeItem(item = {}, defaults = {}) {
     source: item.source || 'manual',
     contentType,
     details,
+    typeTags,
     scope: item.scope || defaults.scope || 'local',
     visibility: item.visibility || defaults.visibility || 'personal',
     sharedWith: Array.isArray(item.sharedWith) ? item.sharedWith : [],
@@ -57,7 +67,8 @@ export function normalizeItem(item = {}, defaults = {}) {
     archived: Boolean(item.archived),
     sensitive: item.sensitive ?? false,
     pendingSync: Boolean(item.pendingSync),
-    lastSyncError: item.lastSyncError || ''
+    lastSyncError: item.lastSyncError || '',
+    syncState: item.syncState || ''
   };
 }
 
