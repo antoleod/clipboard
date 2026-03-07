@@ -1,0 +1,49 @@
+// These rules grant access to a node matching the user's ID, but only
+// if the user is signed in.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // By default, deny all reads and writes to all documents.
+    // This is a critical security measure to prevent unauthorized access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Allow a user to create, read, and update their own profile document.
+    match /users/{userId} {
+      allow get, list, create, update: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /clipboardItems/{itemId} {
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow get, list: if request.auth != null
+        && (
+          resource.data.ownerId == request.auth.uid
+          || (request.auth.token.email != null
+            && resource.data.sharedWith is list
+            && request.auth.token.email in resource.data.sharedWith)
+        );
+
+      allow update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /sharedCollections/{collectionId} {
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow get, list: if request.auth != null
+        && (
+          resource.data.ownerId == request.auth.uid
+          || (request.auth.token.email != null
+            && resource.data.members is list
+            && request.auth.token.email in resource.data.members)
+        );
+
+      allow update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+    }
+  }
+}

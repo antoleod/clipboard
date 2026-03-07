@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Clipboard</string>
+    <string name="title_activity_main">Clipboard</string>
+    <string name="package_name">tech.oryxen.clipboardvault</string>
+    <string name="custom_url_scheme">tech.oryxen.clipboardvault</string>
+</resources>
