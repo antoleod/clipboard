@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const subpathBase = '/clipboard-vault-android/'
+  const subpathBase = '/clipboard/'
   const envBase = globalThis.process?.env?.VITE_APP_BASE_PATH
   const base =
     envBase ||
