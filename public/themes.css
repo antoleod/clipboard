@@ -13,11 +13,13 @@
     --bg-secondary: #151a23;
     --text-primary: #ffffff;
     --text-secondary: #8b9bb4;
-    --accent: #00f0ff;
-    /* Cyan Glow */
-    --border: #1f293a;
-    --card-bg: #111620;
-    --status-success: #00ff9d;
+    --accent: #3b82f6;
+    /* Refined Blue - less neon */
+    --border: rgba(255, 255, 255, 0.08);
+    /* Subtle border */
+    --card-bg: rgba(255, 255, 255, 0.03);
+    /* Glassy feel */
+    --status-success: #10b981;
 }
 
 /* 2. EP Dark Blue (European Parliament) */
@@ -78,7 +80,53 @@ body {
     transition: background-color var(--transition-speed), color var(--transition-speed);
 }
 
+/* Utility Classes for Performance & Layout */
 .card {
     background-color: var(--card-bg);
     border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.card:hover {
+    border-color: var(--accent);
+}
+
+/* Scrollbar hiding for horizontal filters */
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Chip Animation & Styles */
+.chip {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 1;
+    transform: scale(1);
+    max-width: 120px;
+    padding: 6px 12px;
+    margin-right: 8px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-block;
+    overflow: hidden;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.chip.hidden {
+    opacity: 0;
+    transform: scale(0.8);
+    max-width: 0;
+    padding: 0;
+    margin: 0;
+    border-width: 0;
+    pointer-events: none;
 }

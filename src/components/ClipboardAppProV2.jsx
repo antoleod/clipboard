@@ -158,7 +158,8 @@ export default function ClipboardAppProV2() {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState(() => settingsCache?.activeFilters?.[0] || 'all');
   const [searchInput, setSearchInput] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openFooterPanel, setOpenFooterPanel] = useState(null);
+  const toggleFooter = (panel) => setOpenFooterPanel((prev) => (prev === panel ? null : panel));
   const [archiveCollapsed, setArchiveCollapsed] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -320,6 +321,37 @@ export default function ClipboardAppProV2() {
     return map;
   }, [cloud, user.uid]);
 
+  const smartFilters = useMemo(() => {
+    const counts = {};
+    const lastCopied = {};
+
+    FILTERS.forEach(f => {
+      counts[f.id] = 0;
+      lastCopied[f.id] = 0;
+    });
+
+    items.forEach(item => {
+      FILTERS.forEach(f => {
+        if (isTypeMatch(item, f.id)) {
+          counts[f.id]++;
+          const time = new Date(item.lastCopiedAt || item.updatedAt || item.createdAt).getTime();
+          if (time > lastCopied[f.id]) {
+            lastCopied[f.id] = time;
+          }
+        }
+      });
+    });
+
+    let active = FILTERS.filter(f => f.id === 'all' || counts[f.id] > 0);
+    active.sort((a, b) => {
+      if (a.id === 'all') return -1;
+      if (b.id === 'all') return 1;
+      return lastCopied[b.id] - lastCopied[a.id];
+    });
+
+    return { active, counts };
+  }, [items]);
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
@@ -332,20 +364,14 @@ export default function ClipboardAppProV2() {
     return list.sort((a, b) => {
       const aTime = new Date(a.lastCopiedAt || a.updatedAt || a.createdAt).getTime();
       const bTime = new Date(b.lastCopiedAt || b.updatedAt || b.createdAt).getTime();
-      return preferences.sortMode === 'oldest' ? aTime - bTime : bTime - aTime;
+      return bTime - aTime;
     });
-  }, [filter, items, preferences.sortMode, search]);
+  }, [filter, items, search]);
 
   const sections = useMemo(() => buildClipboardSections(filtered, { archiveCollapsed }), [archiveCollapsed, filtered]);
   const sectionTotalCount = useMemo(() => Object.values(sections).reduce((sum, values) => sum + values.length, 0), [sections]);
 
-  const filterCounts = useMemo(() => {
-    const map = {};
-    FILTERS.forEach((entry) => {
-      map[entry.id] = items.filter((item) => isTypeMatch(item, entry.id)).length;
-    });
-    return map;
-  }, [items]);
+
 
   useEffect(() => {
     setVisibleCount(INITIAL_RENDER_WINDOW);
@@ -353,7 +379,7 @@ export default function ClipboardAppProV2() {
 
   useEffect(() => {
     const container = timelineRef.current;
-    if (!container) return () => {};
+    if (!container) return () => { };
 
     const onScroll = () => {
       if (container.scrollTop + container.clientHeight >= container.scrollHeight - 140) {
@@ -693,7 +719,7 @@ export default function ClipboardAppProV2() {
     pollTimerRef.current = window.setInterval(() => {
       if (document.hidden) return;
       scheduleCapture('poll');
-    }, Math.max(1500, Number(preferences.captureIntervalSec || 3) * 1000));
+    }, 1000);
 
     return () => {
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
@@ -871,12 +897,17 @@ export default function ClipboardAppProV2() {
           <div className='feed-head'>
             <h2>Timeline</h2>
             <div className='filters'>
-              {FILTERS.map((entry) => (
+              {smartFilters.active.map((entry) => (
                 <button key={entry.id} className={filter === entry.id ? 'chip active' : 'chip'} onClick={() => handleFilterChange(entry.id)}>
                   {entry.label}
-                  <small>{filterCounts[entry.id] || 0}</small>
+                  {smartFilters.counts[entry.id] > 0 && <small>{smartFilters.counts[entry.id]}</small>}
                 </button>
               ))}
+              {filter !== 'all' && (
+                <button className='chip clear-filter' onClick={() => handleFilterChange('all')}>
+                  Clear all ✕
+                </button>
+              )}
             </div>
           </div>
 
@@ -961,109 +992,79 @@ export default function ClipboardAppProV2() {
           </div>
         </section>
 
-        <aside className={settingsOpen ? 'settings-panel is-open panel-surface' : 'settings-panel panel-surface'}>
-          <button className='btn close-settings' onClick={() => setSettingsOpen(false)}>Close</button>
-          <h3>Settings</h3>
-
-          <div className='panel-block'>
-            <h4>ACCOUNT</h4>
-            <p>{(profile && profile.displayName) || user.displayName || 'User'}</p>
-            <p>{(profile && profile.email) || user.email || '-'}</p>
-            <label className='switch'>
-              <input type='checkbox' checked={keepSignedIn} onChange={(event) => { const value = event.target.checked; setKeepSignedIn(value); updatePreferences({ keepSignedIn: value }); }} />
-              Keep signed in
-            </label>
+        <footer className='footer-fixed panel-surface'>
+          <div className='footer-actions'>
+            <button className={openFooterPanel === 'account' ? 'btn active' : 'btn'} onClick={() => toggleFooter('account')}>Account</button>
+            <button className={openFooterPanel === 'sync' ? 'btn active' : 'btn'} onClick={() => toggleFooter('sync')}>Sync</button>
+            <button className={openFooterPanel === 'capture' ? 'btn active' : 'btn'} onClick={() => toggleFooter('capture')}>Capture</button>
+            <button className={openFooterPanel === 'display' ? 'btn active' : 'btn'} onClick={() => toggleFooter('display')}>Display</button>
+            <button className='btn-strong' disabled={!isOnline || isSyncing} onClick={() => runSyncCycle({ manual: true })}>{isSyncing ? 'Sync...' : 'Force Sync'}</button>
           </div>
 
-          <div className='panel-block'>
-            <h4>SYNC</h4>
-            <p>{syncSummary}</p>
-            <p>Cloud items: {cloud.length}</p>
-            <button className='btn' disabled={!isOnline || isSyncing} onClick={() => runSyncCycle({ manual: true })}>{isSyncing ? 'Syncing...' : 'Manual sync'}</button>
-            <label className='switch'>
-              <input type='checkbox' checked={preferences.autoSyncPending} onChange={(event) => updatePreferences({ autoSyncPending: event.target.checked })} />
-              Auto-sync pending local items
-            </label>
-          </div>
-
-          <div className='panel-block'>
-            <h4>CAPTURE</h4>
-            <p>State: {captureState}</p>
-            <label className='switch'>
-              <input type='checkbox' checked={preferences.autoCapture} onChange={(event) => updatePreferences({ autoCapture: event.target.checked })} />
-              Auto capture
-            </label>
-            <label className='range-row'>
-              Interval: {preferences.captureIntervalSec}s
-              <input type='range' min='2' max='10' step='1' value={preferences.captureIntervalSec} onChange={(event) => updatePreferences({ captureIntervalSec: Number(event.target.value) })} />
-            </label>
-            <label>
-              Capture target
-              <select value={preferences.captureTarget} onChange={(event) => updatePreferences({ captureTarget: event.target.value })}>
-                <option value='synced'>Synced</option>
-                <option value='local'>Local only</option>
-              </select>
-            </label>
-            <textarea value={manualText} onChange={(event) => setManualText(event.target.value)} placeholder='Manual clipboard input...' />
-            <button className='btn-strong' onClick={saveManual}>Save manual text</button>
-          </div>
-          <div className='panel-block'>
-            <h4>DISPLAY</h4>
-            <label>
-              Theme
-              <select value={preferences.themeId} onChange={(event) => updatePreferences({ themeId: event.target.value })}>
-                {THEME_OPTIONS.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}
-              </select>
-            </label>
-            <label>
-              Accent color
-              <input type='color' value={preferences.customThemeOverrides.accentPrimary || '#4ca6ff'} onChange={(event) => updatePreferences({ customThemeOverrides: { ...preferences.customThemeOverrides, accentPrimary: event.target.value } })} />
-            </label>
-            <label className='range-row'>
-              Panel intensity
-              <input type='range' min='-24' max='24' step='1' value={preferences.customThemeOverrides.panelIntensity} onChange={(event) => updatePreferences({ customThemeOverrides: { ...preferences.customThemeOverrides, panelIntensity: Number(event.target.value) } })} />
-            </label>
-            <label className='range-row'>
-              Card contrast
-              <input type='range' min='-24' max='24' step='1' value={preferences.customThemeOverrides.cardContrast} onChange={(event) => updatePreferences({ customThemeOverrides: { ...preferences.customThemeOverrides, cardContrast: Number(event.target.value) } })} />
-            </label>
-            <label className='range-row'>
-              Border strength
-              <input type='range' min='0.6' max='1.8' step='0.1' value={preferences.customThemeOverrides.borderStrength} onChange={(event) => updatePreferences({ customThemeOverrides: { ...preferences.customThemeOverrides, borderStrength: Number(event.target.value) } })} />
-            </label>
-            <label className='range-row'>
-              Blur amount
-              <input type='range' min='0' max='24' step='1' value={preferences.customThemeOverrides.blurAmount} onChange={(event) => updatePreferences({ customThemeOverrides: { ...preferences.customThemeOverrides, blurAmount: Number(event.target.value) } })} />
-            </label>
-            <label className='switch'>
-              <input type='checkbox' checked={preferences.compactMode} onChange={(event) => updatePreferences({ compactMode: event.target.checked })} />
-              Compact mode
-            </label>
-            <label className='switch'>
-              <input type='checkbox' checked={preferences.blurSensitiveContent} onChange={(event) => updatePreferences({ blurSensitiveContent: event.target.checked })} />
-              Blur sensitive content
-            </label>
-            <label className='switch'>
-              <input type='checkbox' checked={preferences.hidePreviews} onChange={(event) => updatePreferences({ hidePreviews: event.target.checked })} />
-              Hide previews
-            </label>
-          </div>
-
-          <div className='panel-block'>
-            <h4>PRIVACY</h4>
-            <p>Local usage: {formatBytes(localUsage)}</p>
-            <p>Quota: {formatBytes(FREE_BYTES)}</p>
-          </div>
-
-          <div className='panel-block settings-footer'>
-            <h4>v1.4.0</h4>
-            <div className='settings-links'>
-              <button className='btn' onClick={clearCache}>Clear local cache</button>
-              <a className='btn' href='https://github.com/antoleod/clipboard' target='_blank' rel='noreferrer'>Help</a>
-              <a className='btn' href='https://oryxen.tech/privacy' target='_blank' rel='noreferrer'>Privacy</a>
+          {openFooterPanel === 'account' && (
+            <div className='footer-panel'>
+              <div className='panel-block'>
+                <h4>ACCOUNT</h4>
+                <p>{(profile && profile.displayName) || user.displayName || 'User'}</p>
+                <p>{(profile && profile.email) || user.email || '-'}</p>
+                <label className='switch'>
+                  <input type='checkbox' checked={keepSignedIn} onChange={(e) => { setKeepSignedIn(e.target.checked); updatePreferences({ keepSignedIn: e.target.checked }); }} />
+                  Keep signed in
+                </label>
+                <p>Quota: {formatBytes(usageBytes(localItems))} / {formatBytes(FREE_BYTES)}</p>
+                <button className='btn' onClick={clearCache}>Clear Context</button>
+              </div>
             </div>
-          </div>
-        </aside>
+          )}
+
+          {openFooterPanel === 'sync' && (
+            <div className='footer-panel'>
+              <div className='panel-block'>
+                <h4>SYNC</h4>
+                <p>{syncSummary}</p>
+                <label className='switch'>
+                  <input type='checkbox' checked={preferences.autoSyncPending} onChange={(e) => updatePreferences({ autoSyncPending: e.target.checked })} />
+                  Auto-sync local
+                </label>
+              </div>
+            </div>
+          )}
+
+          {openFooterPanel === 'capture' && (
+            <div className='footer-panel'>
+              <div className='panel-block'>
+                <h4>CAPTURE</h4>
+                <label className='switch'>
+                  <input type='checkbox' checked={preferences.autoCapture} onChange={(e) => updatePreferences({ autoCapture: e.target.checked })} />
+                  Auto capture
+                </label>
+                <label>
+                  Capture target
+                  <select value={preferences.captureTarget} onChange={(event) => updatePreferences({ captureTarget: event.target.value })}>
+                    <option value='synced'>Synced</option>
+                    <option value='local'>Local</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {openFooterPanel === 'display' && (
+            <div className='footer-panel'>
+              <div className='panel-block'>
+                <h4>DISPLAY</h4>
+                <label className='switch'>
+                  <input type='checkbox' checked={preferences.compactMode} onChange={(e) => updatePreferences({ compactMode: e.target.checked })} />
+                  Compact mode
+                </label>
+                <label className='switch'>
+                  <input type='checkbox' checked={preferences.hidePreviews} onChange={(event) => updatePreferences({ hidePreviews: event.target.checked })} />
+                  Hide previews
+                </label>
+              </div>
+            </div>
+          )}
+        </footer>
       </main>
 
       {commandOpen ? (
