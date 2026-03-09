@@ -23,7 +23,7 @@ import { SYNC_STATES } from '../services/clipboardSyncService';
 import { detectContentType, computeSensitive, getDomain } from '../features/clipboard/contentIntelligence';
 import { buildClipboardSections } from '../features/clipboard/sections';
 import { cleanText } from '../features/clipboard/textTools';
-import { createItemFromText } from '../features/clipboard/model';
+import { createItemFromText, normalizeItem } from '../features/clipboard/model';
 import {
   DEFAULT_USER_PREFERENCES,
   mergeUserPreferences,
@@ -115,6 +115,7 @@ export default function ClipboardAppProV2() {
     privacy: false
   });
   const pollTimerRef = useRef(null);
+  const lastCapturedHashRef = useRef('');
 
   const search = useDebouncedValue(searchInput, 220);
   const effectivePreferences = useMemo(
@@ -127,6 +128,7 @@ export default function ClipboardAppProV2() {
     permissionState,
     permissionCopy,
     canReadClipboard,
+    markPermissionGranted,
     requestPermission,
     refreshPermission
   } = useClipboardPermission();
@@ -236,17 +238,25 @@ export default function ClipboardAppProV2() {
 
   const captureSnapshot = useCallback(
     async (snapshot) => {
-      const item = buildItemFromSnapshot(snapshot, user);
+      const item = normalizeItem(buildItemFromSnapshot(snapshot, user));
+      if (item.contentHash && item.contentHash === lastCapturedHashRef.current) {
+        return false;
+      }
       await saveItem(item);
+      lastCapturedHashRef.current = item.contentHash || '';
+      markPermissionGranted();
+      return true;
     },
-    [saveItem, user]
+    [markPermissionGranted, saveItem, user]
   );
 
   const captureClipboard = useCallback(async () => {
     try {
       const snapshot = await readClipboardSnapshot();
-      await captureSnapshot(snapshot);
-      showToast('Clipboard captured.');
+      const captured = await captureSnapshot(snapshot);
+      if (captured) {
+        showToast('Clipboard captured.');
+      }
     } catch (captureError) {
       showToast(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
     }
@@ -273,6 +283,28 @@ export default function ClipboardAppProV2() {
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     };
   }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture, effectivePreferences.captureIntervalSec]);
+
+  useEffect(() => {
+    if (!effectivePreferences.autoCapture || !canReadClipboard) return;
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        captureClipboard();
+      }
+    };
+
+    const onFocus = () => {
+      captureClipboard();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture]);
 
   useEffect(
     () => () => {

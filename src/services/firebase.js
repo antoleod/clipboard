@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { disableNetwork, enableNetwork, getFirestore, setLogLevel } from 'firebase/firestore';
-import { getAnalytics } from 'firebase/analytics';
+import { isSupported, getAnalytics } from 'firebase/analytics';
 
 function hasPlaceholder(value = '') {
   return (
@@ -69,7 +69,26 @@ if (typeof window !== 'undefined') {
   }
 }
 
-// Initialize Analytics. For GDPR/privacy, this could be made conditional.
-if (typeof window !== 'undefined' && firebaseConfig.measurementId && !hasPlaceholder(firebaseConfig.measurementId)) {
-  getAnalytics(app);
+// Analytics depends on Firebase Installations. Keep it isolated so a bad
+// analytics/installations config does not break auth or Firestore sync.
+const analyticsEnabled = import.meta.env.VITE_FIREBASE_ENABLE_ANALYTICS === 'true';
+
+if (
+  typeof window !== 'undefined' &&
+  analyticsEnabled &&
+  firebaseConfig.measurementId &&
+  !hasPlaceholder(firebaseConfig.measurementId)
+) {
+  isSupported()
+    .then((supported) => {
+      if (!supported) return;
+      try {
+        getAnalytics(app);
+      } catch (error) {
+        console.warn('Firebase Analytics disabled:', error);
+      }
+    })
+    .catch((error) => {
+      console.warn('Firebase Analytics support check failed:', error);
+    });
 }

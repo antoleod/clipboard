@@ -73,6 +73,10 @@ export function useClipboardPermission() {
     }
   }, [refreshPermission]);
 
+  const markPermissionGranted = useCallback(() => {
+    setPermissionState('granted');
+  }, []);
+
   useEffect(() => {
     let active = true;
     let permissionStatus = null;
@@ -107,7 +111,8 @@ export function useClipboardPermission() {
   return {
     permissionState,
     permissionCopy,
-    canReadClipboard: permissionState === 'granted',
+    canReadClipboard: permissionState !== 'denied' && permissionState !== 'unsupported',
+    markPermissionGranted,
     refreshPermission,
     requestPermission
   };
