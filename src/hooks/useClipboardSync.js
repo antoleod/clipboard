@@ -34,6 +34,7 @@ export function useClipboardSync(user, options = {}) {
   const [isHydrated, setIsHydrated] = useState(false);
   const bootstrappedRef = useRef(false);
   const flushInFlightRef = useRef(false);
+  const syncCooldownUntilRef = useRef(0);
 
   const mergedItems = useMemo(
     () => mergeSyncItems(cloudItems, localShadows),
@@ -128,6 +129,7 @@ export function useClipboardSync(user, options = {}) {
 
   const flushOutbox = useCallback(async (reason = 'manual') => {
     if (!user?.uid || !isOnline || flushInFlightRef.current) return;
+    if (Date.now() < syncCooldownUntilRef.current) return;
     flushInFlightRef.current = true;
     setIsSyncing(true);
     updateSyncMeta({ backendState: 'syncing' });
@@ -148,6 +150,8 @@ export function useClipboardSync(user, options = {}) {
           });
         } catch (error) {
           const described = describeCloudError(error);
+          // Avoid hammering the network on repeated failures (common on mobile/ad-blocked clients).
+          syncCooldownUntilRef.current = Date.now() + 15_000;
           setLocalShadows((prev) =>
             prev.map((item) =>
               item.id === shadow.id

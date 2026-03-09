@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { disableNetwork, enableNetwork, getFirestore, setLogLevel } from 'firebase/firestore';
+import { disableNetwork, enableNetwork, getFirestore, initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { isSupported, getAnalytics } from 'firebase/analytics';
 
 function hasPlaceholder(value = '') {
@@ -46,7 +46,19 @@ const app = initializeApp(firebaseConfig);
 
 // Export the necessary Firebase services
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      // Helps on mobile networks / webviews where streaming transports can be flaky.
+      experimentalAutoDetectLongPolling: true,
+      experimentalForceLongPolling: import.meta.env.VITE_FIREBASE_FORCE_LONG_POLLING === 'true',
+      useFetchStreams: false
+    });
+  } catch {
+    // HMR or multiple initializations: fall back to the already-initialized instance.
+    return getFirestore(app);
+  }
+})();
 setLogLevel('error');
 
 if (typeof window !== 'undefined') {

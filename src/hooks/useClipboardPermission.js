@@ -111,7 +111,8 @@ export function useClipboardPermission() {
   return {
     permissionState,
     permissionCopy,
-    canReadClipboard: permissionState !== 'denied' && permissionState !== 'unsupported',
+    // Auto-capture is only reliable once the browser reports an explicit grant.
+    canReadClipboard: permissionState === 'granted',
     markPermissionGranted,
     refreshPermission,
     requestPermission

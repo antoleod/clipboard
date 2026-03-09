@@ -4,10 +4,12 @@ import {
   IconChevron,
   IconCloud,
   IconCopy,
+  IconArchive,
   IconDisplay,
   IconPin,
   IconSettings,
   IconSync,
+  IconTrash,
   IconUser
 } from './Icons';
 import { useAuth } from '../hooks/useAuth';
@@ -143,6 +145,7 @@ export default function ClipboardAppProV2() {
     syncMeta,
     saveItem,
     updateItem,
+    deleteItem,
     flushOutbox
   } = useClipboardSync(user, { autoSyncPending: effectivePreferences.autoSyncPending });
 
@@ -260,21 +263,26 @@ export default function ClipboardAppProV2() {
     [markPermissionGranted, saveItem, user]
   );
 
-  const captureClipboard = useCallback(async () => {
-    try {
-      debugLog('capture', 'Capture requested');
-      const snapshot = await readClipboardSnapshot();
-      const captured = await captureSnapshot(snapshot);
-      if (captured) {
-        showToast('Clipboard captured.');
+  const captureClipboardWithOptions = useCallback(
+    async (options = {}) => {
+      const { silent = true, reason = 'auto' } = options;
+      try {
+        debugLog('capture', 'Capture requested', { reason, silent });
+        const snapshot = await readClipboardSnapshot();
+        const captured = await captureSnapshot(snapshot);
+        if (captured && !silent) showToast('Clipboard captured.');
+      } catch (captureError) {
+        debugWarn('capture', 'Capture failed', {
+          reason,
+          message: captureError instanceof Error ? captureError.message : 'Unknown capture failure'
+        });
+        if (!silent) {
+          showToast(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
+        }
       }
-    } catch (captureError) {
-      debugWarn('capture', 'Capture failed', {
-        message: captureError instanceof Error ? captureError.message : 'Unknown capture failure'
-      });
-      showToast(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
-    }
-  }, [captureSnapshot, showToast]);
+    },
+    [captureSnapshot, showToast]
+  );
 
   const saveManual = useCallback(async () => {
     const text = manualText.trim();
@@ -284,10 +292,11 @@ export default function ClipboardAppProV2() {
     showToast('Note saved.');
   }, [captureSnapshot, manualText, showToast]);
 
-  const captureIntervalMs = useMemo(
-    () => Math.min(900, Math.max(300, effectivePreferences.captureIntervalSec * 1000)),
-    [effectivePreferences.captureIntervalSec]
-  );
+  const captureIntervalMs = useMemo(() => {
+    // Fast enough to feel instant, but avoids hammering the Clipboard API on mobile.
+    const requestedMs = effectivePreferences.captureIntervalSec * 1000;
+    return Math.min(1200, Math.max(900, requestedMs));
+  }, [effectivePreferences.captureIntervalSec]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture) {
@@ -305,14 +314,15 @@ export default function ClipboardAppProV2() {
     });
     window.setTimeout(() => {
       debugLog('capture', 'Triggering immediate capture at startup');
-      captureClipboard();
+      if (!document.hidden && document.hasFocus()) {
+        captureClipboardWithOptions({ reason: 'startup', silent: true });
+      }
     }, 0);
 
     pollTimerRef.current = window.setInterval(() => {
-      debugLog('capture', `Auto capture poll tick (interval ${captureIntervalMs}ms)`, {
-        hidden: document.hidden
-      });
-      captureClipboard();
+      if (document.hidden || !document.hasFocus()) return;
+      debugLog('capture', `Auto capture poll tick (interval ${captureIntervalMs}ms)`);
+      captureClipboardWithOptions({ reason: 'poll', silent: true });
     }, captureIntervalMs);
 
     return () => {
@@ -321,7 +331,7 @@ export default function ClipboardAppProV2() {
     };
   }, [
     canReadClipboard,
-    captureClipboard,
+    captureClipboardWithOptions,
     effectivePreferences.autoCapture,
     captureIntervalMs,
     permissionState
@@ -334,7 +344,7 @@ export default function ClipboardAppProV2() {
       debugLog('capture', 'Clipboard event detected, forcing immediate capture', {
         type: event.type
       });
-      captureClipboard();
+      captureClipboardWithOptions({ reason: `dom-${event.type}`, silent: true });
     };
 
     document.addEventListener('copy', onClipboardEvent);
@@ -344,7 +354,7 @@ export default function ClipboardAppProV2() {
       document.removeEventListener('copy', onClipboardEvent);
       document.removeEventListener('cut', onClipboardEvent);
     };
-  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture]);
+  }, [canReadClipboard, captureClipboardWithOptions, effectivePreferences.autoCapture]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture || !canReadClipboard) return;
@@ -352,13 +362,13 @@ export default function ClipboardAppProV2() {
     const onVisibilityChange = () => {
       if (!document.hidden) {
         debugLog('capture', 'Visibility restored, attempting capture');
-        captureClipboard();
+        captureClipboardWithOptions({ reason: 'visibility', silent: true });
       }
     };
 
     const onFocus = () => {
       debugLog('capture', 'Window focus, attempting capture');
-      captureClipboard();
+      captureClipboardWithOptions({ reason: 'focus', silent: true });
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -368,7 +378,7 @@ export default function ClipboardAppProV2() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', onFocus);
     };
-  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture]);
+  }, [canReadClipboard, captureClipboardWithOptions, effectivePreferences.autoCapture]);
 
   useEffect(() => {
     if (!isDebugLoggingEnabled()) return;
@@ -398,6 +408,30 @@ export default function ClipboardAppProV2() {
       showToast('Copied.');
     },
     [showToast, updateItem]
+  );
+
+  const togglePin = useCallback(
+    async (item) => {
+      await updateItem(item, { pinned: !item.pinned });
+      showToast(item.pinned ? 'Unpinned.' : 'Pinned.');
+    },
+    [showToast, updateItem]
+  );
+
+  const toggleArchive = useCallback(
+    async (item) => {
+      await updateItem(item, { archived: !item.archived });
+      showToast(item.archived ? 'Restored.' : 'Archived.');
+    },
+    [showToast, updateItem]
+  );
+
+  const removeItem = useCallback(
+    async (item) => {
+      await deleteItem(item);
+      showToast('Deleted.');
+    },
+    [deleteItem, showToast]
   );
 
   const exportData = useCallback(() => {
@@ -439,7 +473,7 @@ export default function ClipboardAppProV2() {
               placeholder='Search notes, links, code or people...'
             />
           </div>
-          <button className='btn subtle' onClick={captureClipboard}>Capture</button>
+          <button className='btn subtle' onClick={() => captureClipboardWithOptions({ reason: 'manual', silent: false })}>Capture</button>
         </div>
       </section>
 
@@ -519,8 +553,14 @@ export default function ClipboardAppProV2() {
                                   <button className='icon-button' onClick={() => copyItem(item)} aria-label='Copy item'>
                                     <IconCopy />
                                   </button>
-                                  <button className='icon-button' onClick={() => updateItem(item, { pinned: !item.pinned })} aria-label='Pin item'>
+                                  <button className='icon-button' onClick={() => togglePin(item)} aria-label='Pin item'>
                                     <IconPin />
+                                  </button>
+                                  <button className='icon-button' onClick={() => toggleArchive(item)} aria-label='Archive item'>
+                                    <IconArchive />
+                                  </button>
+                                  <button className='icon-button' onClick={() => removeItem(item)} aria-label='Delete item'>
+                                    <IconTrash />
                                   </button>
                                 </div>
                               </div>
