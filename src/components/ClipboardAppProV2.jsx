@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './Header';
+import {
+  IconChevron,
+  IconCloud,
+  IconCopy,
+  IconDisplay,
+  IconPin,
+  IconSettings,
+  IconSync,
+  IconUser
+} from './Icons';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { useLocalStorage } from '../hooks/useLocalStorage';
@@ -7,19 +17,10 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useClipboardPermission } from '../hooks/useClipboardPermission';
 import { useClipboardSync } from '../hooks/useClipboardSync';
 import { readClipboardSnapshot } from '../services/clipboard';
-import {
-  signOutUser,
-  loadUserPreferences,
-  saveUserPreferences
-} from '../services/authService';
+import { signOutUser, loadUserPreferences, saveUserPreferences } from '../services/authService';
 import { clearApplicationCaches } from '../services/cacheService';
-import { buildShareLink } from '../services/cloudClipboardService';
 import { SYNC_STATES } from '../services/clipboardSyncService';
-import {
-  detectContentType,
-  computeSensitive,
-  getDomain
-} from '../features/clipboard/contentIntelligence';
+import { detectContentType, computeSensitive, getDomain } from '../features/clipboard/contentIntelligence';
 import { buildClipboardSections } from '../features/clipboard/sections';
 import { cleanText } from '../features/clipboard/textTools';
 import { createItemFromText } from '../features/clipboard/model';
@@ -37,9 +38,14 @@ const FILTERS = [
   { id: 'text', label: 'Text' },
   { id: 'url', label: 'Links' },
   { id: 'code', label: 'Code' },
-  { id: 'image', label: 'Images' },
-  { id: 'pinned', label: 'Pinned' },
-  { id: 'archived', label: 'Archived' }
+  { id: 'image', label: 'Images' }
+];
+
+const SETTINGS_SECTIONS = [
+  { id: 'general', label: 'General' },
+  { id: 'sync', label: 'Sync' },
+  { id: 'display', label: 'Display' },
+  { id: 'privacy', label: 'Privacy' }
 ];
 
 function buildItemFromSnapshot(snapshot, user) {
@@ -57,24 +63,7 @@ function matchesFilter(item, filter) {
   if (filter === 'all') return true;
   if (filter === 'pending') return item.syncState === SYNC_STATES.PENDING || item.syncState === SYNC_STATES.SYNCING;
   if (filter === 'error') return item.syncState === SYNC_STATES.ERROR;
-  if (filter === 'pinned') return Boolean(item.pinned);
-  if (filter === 'archived') return Boolean(item.archived);
   return item.contentType === filter;
-}
-
-function syncStateLabel(syncState) {
-  switch (syncState) {
-    case SYNC_STATES.LOCAL:
-      return 'Local only';
-    case SYNC_STATES.PENDING:
-      return 'Pending sync';
-    case SYNC_STATES.SYNCING:
-      return 'Syncing';
-    case SYNC_STATES.ERROR:
-      return 'Sync error';
-    default:
-      return 'Synced';
-  }
 }
 
 function statusTone(syncState) {
@@ -92,35 +81,40 @@ function statusTone(syncState) {
   }
 }
 
+function statusCopy(isOnline, isSyncing, pendingCount, syncError) {
+  if (!isOnline) return { label: 'Offline', tone: 'offline' };
+  if (isSyncing || pendingCount > 0) return { label: 'Syncing', tone: 'syncing' };
+  if (syncError) return { label: 'Issue', tone: 'error' };
+  return { label: 'Synced', tone: 'synced' };
+}
+
+function iconLabelForItem(item) {
+  if (item.contentType === 'url') return 'LINK';
+  if (item.contentType === 'code') return 'CODE';
+  if (item.contentType === 'image') return 'IMG';
+  return 'TEXT';
+}
+
 export default function ClipboardAppProV2() {
   const { user, profile, keepSignedIn, setKeepSignedIn } = useAuth();
-  const [settingsCache, setSettingsCache] = useLocalStorage(
-    'clipboard-vault-settings',
-    DEFAULT_USER_PREFERENCES
-  );
-  const [preferences, setPreferences] = useState(() =>
-    mergeUserPreferences(DEFAULT_USER_PREFERENCES, settingsCache || {})
-  );
+  const [settingsCache, setSettingsCache] = useLocalStorage('clipboard-vault-settings', DEFAULT_USER_PREFERENCES);
+  const [preferences, setPreferences] = useState(() => mergeUserPreferences(DEFAULT_USER_PREFERENCES, settingsCache || {}));
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [footerPanel, setFooterPanel] = useState('sync');
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [filter, setFilter] = useState('all');
   const [manualText, setManualText] = useState('');
-  const [status, setStatus] = useState('Ready.');
-  const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [archiveCollapsed, setArchiveCollapsed] = useState(true);
+  const [preferencesNotice, setPreferencesNotice] = useState('');
+  const [settingsSections, setSettingsSections] = useState({
+    general: true,
+    sync: true,
+    display: true,
+    privacy: false
+  });
   const pollTimerRef = useRef(null);
-
-  const {
-    permissionState,
-    permissionCopy,
-    canReadClipboard,
-    requestPermission,
-    refreshPermission
-  } = useClipboardPermission();
 
   const search = useDebouncedValue(searchInput, 220);
   const effectivePreferences = useMemo(
@@ -130,32 +124,37 @@ export default function ClipboardAppProV2() {
   const debouncedPreferences = useDebouncedValue(effectivePreferences, 350);
 
   const {
+    permissionState,
+    permissionCopy,
+    canReadClipboard,
+    requestPermission,
+    refreshPermission
+  } = useClipboardPermission();
+
+  const {
     items,
     diagnostics,
     isOnline,
     isSyncing,
-    isHydrated,
     pendingCount,
     syncMeta,
     saveItem,
     updateItem,
-    deleteItem,
-    retryFailed,
     flushOutbox
   } = useClipboardSync(user, { autoSyncPending: effectivePreferences.autoSyncPending });
 
-  useTheme(
-    effectivePreferences.themeId,
-    effectivePreferences.themeMode,
-    effectivePreferences.customThemeOverrides
-  );
+  useTheme(effectivePreferences.themeId, effectivePreferences.themeMode, effectivePreferences.customThemeOverrides);
 
   const updatePreferences = useCallback((nextValue) => {
     setPreferences((prev) => {
-      const candidate =
-        typeof nextValue === 'function' ? nextValue(prev) : { ...prev, ...nextValue };
+      const candidate = typeof nextValue === 'function' ? nextValue(prev) : { ...prev, ...nextValue };
       return normalizeUserPreferences(candidate);
     });
+  }, []);
+
+  const showToast = useCallback((message) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 1800);
   }, []);
 
   useEffect(() => {
@@ -178,7 +177,7 @@ export default function ClipboardAppProV2() {
       })
       .catch(() => {
         if (active) {
-          setError('Preferences cloud sync unavailable. Using local settings.');
+          setPreferencesNotice('Cloud preferences unavailable. Using local settings.');
         }
       })
       .finally(() => {
@@ -193,8 +192,8 @@ export default function ClipboardAppProV2() {
   useEffect(() => {
     if (!preferencesReady || !user.uid) return;
     setSettingsCache(debouncedPreferences);
-    saveUserPreferences(user.uid, debouncedPreferences).catch((saveError) => {
-      setError(saveError instanceof Error ? saveError.message : 'Could not save preferences.');
+    saveUserPreferences(user.uid, debouncedPreferences).catch(() => {
+      setPreferencesNotice('Cloud preferences unavailable. Changes stay local on this device.');
     });
   }, [debouncedPreferences, preferencesReady, setSettingsCache, user.uid]);
 
@@ -202,13 +201,14 @@ export default function ClipboardAppProV2() {
     refreshPermission();
   }, [refreshPermission]);
 
-  const syncSummary = useMemo(() => {
-    if (!isOnline) return 'Offline. Local cache active.';
-    if (isSyncing) return `Syncing ${pendingCount} pending items...`;
-    if (syncMeta.lastError) return 'Cloud degraded. Retrying pending changes.';
-    if (pendingCount > 0) return `${pendingCount} pending changes.`;
-    return 'Cloud synced.';
-  }, [isOnline, isSyncing, pendingCount, syncMeta.lastError]);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setSettingsOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [settingsOpen]);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -216,13 +216,7 @@ export default function ClipboardAppProV2() {
       .filter((item) => matchesFilter(item, filter))
       .filter((item) => {
         if (!query) return true;
-        return [
-          item.preview,
-          item.content,
-          item.contentType,
-          item.ownerEmail,
-          item.lastSyncError
-        ]
+        return [item.preview, item.content, item.contentType, item.ownerEmail, item.lastSyncError]
           .filter(Boolean)
           .join(' ')
           .toLowerCase()
@@ -235,52 +229,43 @@ export default function ClipboardAppProV2() {
     [archiveCollapsed, filteredItems]
   );
 
-  const stats = useMemo(
-    () => ({
-      total: items.length,
-      synced: items.filter((item) => item.syncState === SYNC_STATES.SYNCED).length,
-      pending: items.filter((item) => item.syncState === SYNC_STATES.PENDING || item.syncState === SYNC_STATES.SYNCING).length,
-      local: items.filter((item) => item.syncState === SYNC_STATES.LOCAL).length,
-      errors: items.filter((item) => item.syncState === SYNC_STATES.ERROR).length
-    }),
-    [items]
+  const syncBadge = useMemo(
+    () => statusCopy(isOnline, isSyncing, pendingCount, syncMeta.lastError),
+    [isOnline, isSyncing, pendingCount, syncMeta.lastError]
   );
 
   const captureSnapshot = useCallback(
-    async (snapshot, reason) => {
+    async (snapshot) => {
       const item = buildItemFromSnapshot(snapshot, user);
       await saveItem(item);
-      setStatus(reason === 'manual' ? 'Manual note saved.' : 'Clipboard captured.');
-      setError('');
     },
     [saveItem, user]
   );
 
-  const captureClipboard = useCallback(
-    async (reason = 'manual') => {
-      try {
-        const snapshot = await readClipboardSnapshot();
-        await captureSnapshot(snapshot, reason);
-      } catch (captureError) {
-        setError(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
-      }
-    },
-    [captureSnapshot]
-  );
+  const captureClipboard = useCallback(async () => {
+    try {
+      const snapshot = await readClipboardSnapshot();
+      await captureSnapshot(snapshot);
+      showToast('Clipboard captured.');
+    } catch (captureError) {
+      showToast(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
+    }
+  }, [captureSnapshot, showToast]);
 
   const saveManual = useCallback(async () => {
     const text = manualText.trim();
     if (!text) return;
-    await captureSnapshot(createItemFromText(text, 'manual-entry'), 'manual');
+    await captureSnapshot(createItemFromText(text, 'manual-entry'));
     setManualText('');
-  }, [captureSnapshot, manualText]);
+    showToast('Note saved.');
+  }, [captureSnapshot, manualText, showToast]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture || !canReadClipboard) return;
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     pollTimerRef.current = window.setInterval(() => {
       if (!document.hidden) {
-        captureClipboard('poll');
+        captureClipboard();
       }
     }, effectivePreferences.captureIntervalSec * 1000);
 
@@ -305,10 +290,9 @@ export default function ClipboardAppProV2() {
         usageCount: Number(item.copyCount || item.usageCount || 0) + 1,
         lastCopiedAt: new Date().toISOString()
       });
-      setToast('Copied to clipboard.');
-      window.setTimeout(() => setToast(''), 1800);
+      showToast('Copied.');
     },
-    [updateItem]
+    [showToast, updateItem]
   );
 
   const exportData = useCallback(() => {
@@ -327,37 +311,30 @@ export default function ClipboardAppProV2() {
     window.location.reload();
   }, [user.uid]);
 
-  const copyDiagnostics = useCallback(async () => {
-    const payload = JSON.stringify(diagnostics, null, 2);
-    await navigator.clipboard.writeText(payload);
-    setToast('Diagnostics copied.');
-    window.setTimeout(() => setToast(''), 1800);
-  }, [diagnostics]);
+  const toggleSettingsSection = useCallback((sectionId) => {
+    setSettingsSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
+  }, []);
+
+  const devMode = import.meta.env.DEV;
 
   return (
-    <div className={effectivePreferences.compactMode ? 'layout density-compact' : 'layout density-comfortable'}>
-      <Header
-        onSignOut={signOutUser}
-        onExport={exportData}
-        onToggleSettings={() => setSettingsOpen((value) => !value)}
-        user={user}
-        profile={profile}
-        syncSummary={syncSummary}
-        isOnline={isOnline}
-      />
+    <div className={effectivePreferences.compactMode ? 'layout density-compact shell-minimal' : 'layout density-comfortable shell-minimal'}>
+      <Header onSignOut={signOutUser} onExport={exportData} user={user} profile={profile} />
 
-      <section className='status-line' role='status' aria-live='polite'>
-        <div className='status-main'>
-          <strong>{syncSummary}</strong>
-          <span>{isHydrated ? status : 'Hydrating workspace...'}</span>
-          {error ? <span className='status-error'>{error}</span> : null}
-          {syncMeta.lastError ? <span className='status-error'>{syncMeta.lastError}</span> : null}
+      <section className='workspace-bar'>
+        <div className={`status-pill tone-${syncBadge.tone}`}>
+          <span className='status-dot' />
+          {syncBadge.label}
         </div>
-        <div className='status-right'>
-          {!isOnline ? <span className='status-badge danger'>Offline fallback</span> : null}
-          {pendingCount ? <span className='status-badge warning'>Pending {pendingCount}</span> : null}
-          <span className='status-badge neutral'>Listener {diagnostics.listenerState}</span>
-          <span className='status-badge neutral'>Permission {permissionState}</span>
+        <div className='workspace-tools'>
+          <div className='search-shell'>
+            <input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder='Search notes, links, code or people...'
+            />
+          </div>
+          <button className='btn subtle' onClick={captureClipboard}>Capture</button>
         </div>
       </section>
 
@@ -374,19 +351,15 @@ export default function ClipboardAppProV2() {
         </section>
       ) : null}
 
-      <section className='stats-chips'>
-        <span>TOTAL {stats.total}</span>
-        <span>SYNCED {stats.synced}</span>
-        <span>PENDING {stats.pending}</span>
-        <span>LOCAL {stats.local}</span>
-        <span>ERRORS {stats.errors}</span>
-      </section>
-
-      <main className='content app-grid'>
-        <section className='feed panel-surface'>
-          <div className='feed-head'>
-            <h2>Timeline</h2>
-            <div className='filters'>
+      <main className='content timeline-layout'>
+        <section className='composer panel-surface soft-panel'>
+          <textarea
+            value={manualText}
+            onChange={(event) => setManualText(event.target.value)}
+            placeholder='Quick note, paste, idea, snippet...'
+          />
+          <div className='composer-actions'>
+            <div className='filters compact-filters'>
               {FILTERS.map((entry) => (
                 <button
                   key={entry.id}
@@ -400,282 +373,224 @@ export default function ClipboardAppProV2() {
                 </button>
               ))}
             </div>
+            <button className='btn-strong' onClick={saveManual}>Save note</button>
           </div>
+        </section>
 
-          <div className='tools-bar'>
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder='Search content, owner, errors or type...'
-            />
-            <button className='btn' onClick={() => setDiagnosticsOpen((value) => !value)}>
-              {diagnosticsOpen ? 'Hide debug' : 'Show debug'}
-            </button>
-          </div>
-
-          <div className='capture-row'>
-            <textarea
-              value={manualText}
-              onChange={(event) => setManualText(event.target.value)}
-              placeholder='Paste or type a note manually...'
-            />
-            <div className='capture-actions'>
-              <button className='btn-strong' onClick={saveManual}>Save note</button>
-              <button className='btn' onClick={() => captureClipboard('clipboard-read')}>Capture clipboard</button>
-            </div>
-          </div>
-
-          {diagnosticsOpen ? (
-            <section className='diagnostics-panel'>
-              <div className='diagnostics-head'>
-                <h3>Diagnostics</h3>
-                <button className='btn' onClick={copyDiagnostics}>Copy</button>
-              </div>
-              <pre>{JSON.stringify(diagnostics, null, 2)}</pre>
-            </section>
-          ) : null}
-
-          <div className='timeline-scroll'>
+        <section className='feed feed-focused'>
+          <div className='timeline-scroll timeline-clean'>
             {filteredItems.length === 0 ? (
-              <div className='empty-state'>
-                <h3>No items yet</h3>
-                <p>Cloud and local cache are ready. Capture something to populate the timeline.</p>
+              <div className='empty-state minimal-empty'>
+                <h3>Nothing here yet</h3>
+                <p>Capture something to start your timeline.</p>
               </div>
             ) : (
               Object.entries(sections).map(([section, sectionItems]) => {
                 if (!sectionItems.length) return null;
                 return (
                   <div key={section} className='timeline-section'>
-                    <h3 className='timeline-label'>
-                      {section}
+                    <div className='timeline-heading'>
+                      <h3 className='timeline-label'>{section}</h3>
                       {section === 'ARCHIVE' ? (
-                        <button className='mini-action' onClick={() => setArchiveCollapsed((value) => !value)}>
+                        <button className='mini-action ghost' onClick={() => setArchiveCollapsed((value) => !value)}>
                           {archiveCollapsed ? 'Expand' : 'Collapse'}
                         </button>
                       ) : null}
-                    </h3>
+                    </div>
 
-                    {sectionItems.map((item) => (
-                      <article key={item.id} className={`entry type-${item.contentType}${item.pinned ? ' is-pinned' : ''}`}>
-                        <div className='entry-head'>
-                          <div>
-                            <div className='entry-badges'>
+                    <div className='timeline-list'>
+                      {sectionItems.map((item) => (
+                        <article key={item.id} className='timeline-card'>
+                          <div className='timeline-card-main'>
+                            <div className='timeline-icon-block'>
+                              <span className='timeline-type-icon'>{iconLabelForItem(item)}</span>
                               <span className={`sync-dot sync-${statusTone(item.syncState)}`} />
-                              <span className='entry-kind'>{item.contentType}</span>
-                              <span className='scope-pill'>{syncStateLabel(item.syncState)}</span>
-                              {item.pinned ? <span className='scope-pill'>Pinned</span> : null}
-                              {item.archived ? <span className='scope-pill'>Archived</span> : null}
                             </div>
-                            <h3>{item.preview || 'Clipboard entry'}</h3>
-                            <p className='entry-meta'>
-                              {new Date(item.updatedAt || item.createdAt).toLocaleString()} | {item.ownerEmail || 'local'} | {item.scope}
-                            </p>
+
+                            <div className='timeline-content-block'>
+                              <div className='timeline-content-top'>
+                                <p className='timeline-preview'>{item.preview || 'Clipboard entry'}</p>
+                                <div className='timeline-card-actions'>
+                                  <button className='icon-button' onClick={() => copyItem(item)} aria-label='Copy item'>
+                                    <IconCopy />
+                                  </button>
+                                  <button className='icon-button' onClick={() => updateItem(item, { pinned: !item.pinned })} aria-label='Pin item'>
+                                    <IconPin />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className='timeline-meta'>
+                                <span>{new Date(item.updatedAt || item.createdAt).toLocaleString()}</span>
+                                <span>{item.contentType}</span>
+                                {item.contentType === 'url' ? <span>{getDomain(String(item.content || ''))}</span> : null}
+                                {item.lastSyncError ? <span className='item-error-inline'>{item.lastSyncError}</span> : null}
+                              </div>
+
+                              {!effectivePreferences.hidePreviews ? (
+                                <div className={effectivePreferences.blurSensitiveContent && item.sensitive ? 'timeline-body blur-sensitive' : 'timeline-body'}>
+                                  {item.kind === 'image' ? (
+                                    <img className='entry-image' src={item.content} alt='Clipboard capture' loading='lazy' />
+                                  ) : (
+                                    <pre>{item.contentType === 'code' ? cleanText(item.content) : String(item.content || '')}</pre>
+                                  )}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
-
-                        <div className={effectivePreferences.blurSensitiveContent && item.sensitive ? 'entry-preview blur-sensitive' : 'entry-preview'}>
-                          {effectivePreferences.hidePreviews ? <div className='preview-muted'>Preview hidden</div> : null}
-                          {!effectivePreferences.hidePreviews && item.kind === 'image' ? (
-                            <img className='entry-image' src={item.content} alt='Clipboard capture' loading='lazy' />
-                          ) : null}
-                          {!effectivePreferences.hidePreviews && item.kind !== 'image' && item.contentType === 'url' ? (
-                            <div className='url-preview'>
-                              <strong>{getDomain(String(item.content || '')) || 'Link'}</strong>
-                              <a href={String(item.content)} target='_blank' rel='noreferrer'>
-                                {String(item.content)}
-                              </a>
-                            </div>
-                          ) : null}
-                          {!effectivePreferences.hidePreviews && item.kind !== 'image' && item.contentType !== 'url' ? (
-                            <pre>{item.contentType === 'code' ? cleanText(item.content) : String(item.content || '')}</pre>
-                          ) : null}
-                        </div>
-
-                        {item.lastSyncError ? <p className='item-error'>{item.lastSyncError}</p> : null}
-
-                        <div className='entry-foot'>
-                          <button className='mini-action' onClick={() => copyItem(item)}>Copy</button>
-                          <button className='mini-action' onClick={() => updateItem(item, { pinned: !item.pinned })}>
-                            {item.pinned ? 'Unpin' : 'Pin'}
-                          </button>
-                          <button className='mini-action' onClick={() => updateItem(item, { archived: !item.archived })}>
-                            {item.archived ? 'Restore' : 'Archive'}
-                          </button>
-                          {item.syncState === SYNC_STATES.ERROR ? (
-                            <button className='mini-action' onClick={retryFailed}>Retry</button>
-                          ) : null}
-                          {item.scope !== 'local' ? (
-                            <button
-                              className='mini-action'
-                              onClick={() => navigator.clipboard.writeText(buildShareLink(item.id))}
-                            >
-                              Share
-                            </button>
-                          ) : null}
-                          <button className='mini-action' onClick={() => deleteItem(item)}>Delete</button>
-                        </div>
-                      </article>
-                    ))}
+                        </article>
+                      ))}
+                    </div>
                   </div>
                 );
               })
             )}
           </div>
         </section>
+      </main>
 
-        <aside className={settingsOpen ? 'panel-surface settings-panel is-open' : 'panel-surface settings-panel'}>
-          <div className='settings-head'>
-            <h3>Settings</h3>
-            <button className='btn close-settings' onClick={() => setSettingsOpen(false)}>Close</button>
+      <div className='footer-dock-shell'>
+        <footer className='footer-minimal'>
+          <div className='footer-left'>
+            <span className={`dock-status-dot tone-${syncBadge.tone}`} />
+            <IconCloud className={`dock-cloud tone-${isOnline ? 'synced' : 'offline'}`} />
           </div>
 
-          <div className='panel-block'>
-            <h4>Theme</h4>
-            <label>
-              Palette
-              <select value={effectivePreferences.themeId} onChange={(event) => updatePreferences({ themeId: event.target.value })}>
-                {THEME_OPTIONS.map((theme) => (
-                  <option key={theme.id} value={theme.id}>{theme.label}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Mode
-              <select value={effectivePreferences.themeMode} onChange={(event) => updatePreferences({ themeMode: event.target.value })}>
-                <option value='dark'>Dark</option>
-                <option value='light'>Light</option>
-              </select>
-            </label>
-          </div>
+          <div className='footer-center' />
 
-          <div className='panel-block'>
-            <h4>Capture</h4>
-            <label className='switch'>
-              <input
-                type='checkbox'
-                checked={effectivePreferences.autoCapture}
-                onChange={(event) => updatePreferences({ autoCapture: event.target.checked })}
-              />
-              Auto capture clipboard
-            </label>
-            <label className='switch'>
-              <input
-                type='checkbox'
-                checked={effectivePreferences.autoSyncPending}
-                onChange={(event) => updatePreferences({ autoSyncPending: event.target.checked })}
-              />
-              Auto retry pending changes
-            </label>
-            <label>
-              Poll interval
-              <select
-                value={effectivePreferences.captureIntervalSec}
-                onChange={(event) => updatePreferences({ captureIntervalSec: Number(event.target.value) })}
-              >
-                <option value='2'>2 sec</option>
-                <option value='3'>3 sec</option>
-                <option value='5'>5 sec</option>
-                <option value='10'>10 sec</option>
-              </select>
-            </label>
-          </div>
-
-          <div className='panel-block'>
-            <h4>Display</h4>
-            <label className='switch'>
-              <input
-                type='checkbox'
-                checked={effectivePreferences.compactMode}
-                onChange={(event) => updatePreferences({ compactMode: event.target.checked })}
-              />
-              Compact layout
-            </label>
-            <label className='switch'>
-              <input
-                type='checkbox'
-                checked={effectivePreferences.hidePreviews}
-                onChange={(event) => updatePreferences({ hidePreviews: event.target.checked })}
-              />
-              Hide previews
-            </label>
-            <label className='switch'>
-              <input
-                type='checkbox'
-                checked={effectivePreferences.blurSensitiveContent}
-                onChange={(event) => updatePreferences({ blurSensitiveContent: event.target.checked })}
-              />
-              Blur sensitive content
-            </label>
-          </div>
-        </aside>
-
-        <footer className='footer-fixed panel-surface'>
-          <div className='footer-actions'>
-            <button className={footerPanel === 'sync' ? 'btn active' : 'btn'} onClick={() => setFooterPanel('sync')}>Sync</button>
-            <button className={footerPanel === 'display' ? 'btn active' : 'btn'} onClick={() => setFooterPanel('display')}>Display</button>
-            <button className={footerPanel === 'account' ? 'btn active' : 'btn'} onClick={() => setFooterPanel('account')}>Account</button>
-            <button className='btn-strong' onClick={() => flushOutbox('footer-force')} disabled={!isOnline || isSyncing}>
-              {isSyncing ? 'Syncing...' : 'Force sync'}
+          <div className='footer-right'>
+            <button className='dock-icon' onClick={() => flushOutbox('footer-sync')} aria-label='Sync now'>
+              <IconSync />
+            </button>
+            <button className='dock-icon' onClick={() => updatePreferences({ compactMode: !effectivePreferences.compactMode })} aria-label='Display settings'>
+              <IconDisplay />
+            </button>
+            <button className={`dock-icon${accountMenuOpen ? ' active' : ''}`} onClick={() => setAccountMenuOpen((value) => !value)} aria-label='Account'>
+              <IconUser />
+            </button>
+            <button className={`dock-icon${settingsOpen ? ' active' : ''}`} onClick={() => setSettingsOpen(true)} aria-label='Settings'>
+              <IconSettings />
             </button>
           </div>
-
-          {footerPanel === 'sync' ? (
-            <div className='footer-panel'>
-              <div className='panel-block footer-grid'>
-                <div>
-                  <h4>Sync state</h4>
-                  <p>{syncSummary}</p>
-                  <p>Last sync: {diagnostics.lastSyncAt || 'Not yet'}</p>
-                </div>
-                <div>
-                  <h4>Cloud status</h4>
-                  <p>Listener: {diagnostics.listenerState}</p>
-                  <p>Backend: {diagnostics.backendState}</p>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {footerPanel === 'display' ? (
-            <div className='footer-panel'>
-              <div className='panel-block footer-grid'>
-                <div>
-                  <h4>Theme</h4>
-                  <p>{effectivePreferences.themeId}</p>
-                </div>
-                <div>
-                  <h4>Layout</h4>
-                  <p>{effectivePreferences.compactMode ? 'Compact' : 'Comfortable'}</p>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {footerPanel === 'account' ? (
-            <div className='footer-panel'>
-              <div className='panel-block footer-grid'>
-                <div>
-                  <h4>Account</h4>
-                  <p>{profile?.displayName || user.displayName || 'User'}</p>
-                  <p>{profile?.email || user.email || '-'}</p>
-                  <label className='switch'>
-                    <input
-                      type='checkbox'
-                      checked={keepSignedIn}
-                      onChange={(event) => setKeepSignedIn(event.target.checked)}
-                    />
-                    Keep signed in
-                  </label>
-                </div>
-                <div className='footer-account-actions'>
-                  <button className='btn' onClick={clearCache}>Clear local cache</button>
-                  <button className='btn' onClick={() => setSettingsOpen(true)}>Open settings</button>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </footer>
-      </main>
+
+        {accountMenuOpen ? (
+          <div className='account-popover'>
+            <strong>{profile?.displayName || user.displayName || 'User'}</strong>
+            <span>{profile?.email || user.email || '-'}</span>
+            <button className='btn' onClick={clearCache}>Clear local cache</button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className={settingsOpen ? 'settings-overlay is-open' : 'settings-overlay'} onClick={() => setSettingsOpen(false)}>
+        <aside
+          className={settingsOpen ? 'settings-drawer is-open' : 'settings-drawer'}
+          onClick={(event) => event.stopPropagation()}
+          aria-hidden={!settingsOpen}
+        >
+          <div className='settings-drawer-head'>
+            <div>
+              <h2>Settings</h2>
+              <p>Quiet controls for this device and account.</p>
+            </div>
+            <button className='btn' onClick={() => setSettingsOpen(false)}>Close</button>
+          </div>
+
+          {preferencesNotice ? <p className='settings-note'>{preferencesNotice}</p> : null}
+
+          {SETTINGS_SECTIONS.map((section) => (
+            <section key={section.id} className='settings-group'>
+              <button className='settings-group-toggle' onClick={() => toggleSettingsSection(section.id)}>
+                <span>{section.label}</span>
+                <IconChevron className={settingsSections[section.id] ? 'chevron-open' : 'chevron-closed'} />
+              </button>
+
+              {settingsSections[section.id] ? (
+                <div className='settings-group-body'>
+                  {section.id === 'general' ? (
+                    <>
+                      <label className='switch'>
+                        <input type='checkbox' checked={keepSignedIn} onChange={(event) => setKeepSignedIn(event.target.checked)} />
+                        Keep signed in
+                      </label>
+                      <label>
+                        Theme
+                        <select value={effectivePreferences.themeId} onChange={(event) => updatePreferences({ themeId: event.target.value })}>
+                          {THEME_OPTIONS.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        Mode
+                        <select value={effectivePreferences.themeMode} onChange={(event) => updatePreferences({ themeMode: event.target.value })}>
+                          <option value='dark'>Dark</option>
+                          <option value='light'>Light</option>
+                        </select>
+                      </label>
+                    </>
+                  ) : null}
+
+                  {section.id === 'sync' ? (
+                    <>
+                      <label className='switch'>
+                        <input type='checkbox' checked={effectivePreferences.autoSyncPending} onChange={(event) => updatePreferences({ autoSyncPending: event.target.checked })} />
+                        Auto-sync pending items
+                      </label>
+                      <label className='switch'>
+                        <input type='checkbox' checked={effectivePreferences.autoCapture} onChange={(event) => updatePreferences({ autoCapture: event.target.checked })} />
+                        Auto capture clipboard
+                      </label>
+                      <label>
+                        Poll interval
+                        <select value={effectivePreferences.captureIntervalSec} onChange={(event) => updatePreferences({ captureIntervalSec: Number(event.target.value) })}>
+                          <option value='2'>2 sec</option>
+                          <option value='3'>3 sec</option>
+                          <option value='5'>5 sec</option>
+                          <option value='10'>10 sec</option>
+                        </select>
+                      </label>
+                      <button className='btn' onClick={() => flushOutbox('drawer-sync')} disabled={!isOnline || isSyncing}>
+                        {isSyncing ? 'Syncing…' : 'Sync now'}
+                      </button>
+                    </>
+                  ) : null}
+
+                  {section.id === 'display' ? (
+                    <>
+                      <label className='switch'>
+                        <input type='checkbox' checked={effectivePreferences.compactMode} onChange={(event) => updatePreferences({ compactMode: event.target.checked })} />
+                        Compact density
+                      </label>
+                      <label className='switch'>
+                        <input type='checkbox' checked={effectivePreferences.hidePreviews} onChange={(event) => updatePreferences({ hidePreviews: event.target.checked })} />
+                        Hide previews
+                      </label>
+                    </>
+                  ) : null}
+
+                  {section.id === 'privacy' ? (
+                    <>
+                      <label className='switch'>
+                        <input type='checkbox' checked={effectivePreferences.blurSensitiveContent} onChange={(event) => updatePreferences({ blurSensitiveContent: event.target.checked })} />
+                        Blur sensitive content
+                      </label>
+                      {devMode ? (
+                        <div className='diagnostics-panel diagnostics-inline'>
+                          <div className='diagnostics-head'>
+                            <h3>Developer diagnostics</h3>
+                            <button className='btn' onClick={() => navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2))}>Copy</button>
+                          </div>
+                          <pre>{JSON.stringify(diagnostics, null, 2)}</pre>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          ))}
+        </aside>
+      </div>
 
       {toast ? <div className='toast'><span>{toast}</span></div> : null}
     </div>
