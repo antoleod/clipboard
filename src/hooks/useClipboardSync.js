@@ -133,6 +133,7 @@ export function useClipboardSync(user, options = {}) {
     flushInFlightRef.current = true;
     setIsSyncing(true);
     updateSyncMeta({ backendState: 'syncing' });
+    let errorOccurred = false;
 
     try {
       const current = [...localShadows].sort(
@@ -149,6 +150,7 @@ export function useClipboardSync(user, options = {}) {
             backendState: 'connected'
           });
         } catch (error) {
+          errorOccurred = true;
           const described = describeCloudError(error);
           // Avoid hammering the network on repeated failures (common on mobile/ad-blocked clients).
           syncCooldownUntilRef.current = Date.now() + 15_000;
@@ -169,12 +171,14 @@ export function useClipboardSync(user, options = {}) {
             lastError: described.message,
             backendState: 'degraded'
           });
+          // Stop trying to flush more items if one fails, likely due to a network issue.
+          break;
         }
       }
     } finally {
       flushInFlightRef.current = false;
       setIsSyncing(false);
-      if (reason !== 'listener-retry') {
+      if (!errorOccurred && reason !== 'listener-retry') {
         updateSyncMeta({ backendState: 'connected' });
       }
     }
