@@ -17,6 +17,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useClipboardPermission } from '../hooks/useClipboardPermission';
 import { useClipboardSync } from '../hooks/useClipboardSync';
 import { readClipboardSnapshot } from '../services/clipboard';
+import { debugLog, debugWarn, isDebugLoggingEnabled } from '../services/debugLogger';
 import { signOutUser, loadUserPreferences, saveUserPreferences } from '../services/authService';
 import { clearApplicationCaches } from '../services/cacheService';
 import { SYNC_STATES } from '../services/clipboardSyncService';
@@ -240,8 +241,17 @@ export default function ClipboardAppProV2() {
     async (snapshot) => {
       const item = normalizeItem(buildItemFromSnapshot(snapshot, user));
       if (item.contentHash && item.contentHash === lastCapturedHashRef.current) {
+        debugLog('capture', 'Skipped duplicate clipboard snapshot', {
+          itemId: item.id,
+          contentHash: item.contentHash
+        });
         return false;
       }
+      debugLog('capture', 'Saving clipboard snapshot', {
+        itemId: item.id,
+        contentType: item.contentType,
+        source: item.source
+      });
       await saveItem(item);
       lastCapturedHashRef.current = item.contentHash || '';
       markPermissionGranted();
@@ -252,12 +262,16 @@ export default function ClipboardAppProV2() {
 
   const captureClipboard = useCallback(async () => {
     try {
+      debugLog('capture', 'Capture requested');
       const snapshot = await readClipboardSnapshot();
       const captured = await captureSnapshot(snapshot);
       if (captured) {
         showToast('Clipboard captured.');
       }
     } catch (captureError) {
+      debugWarn('capture', 'Capture failed', {
+        message: captureError instanceof Error ? captureError.message : 'Unknown capture failure'
+      });
       showToast(captureError instanceof Error ? captureError.message : 'Clipboard capture failed.');
     }
   }, [captureSnapshot, showToast]);
@@ -271,29 +285,46 @@ export default function ClipboardAppProV2() {
   }, [captureSnapshot, manualText, showToast]);
 
   useEffect(() => {
-    if (!effectivePreferences.autoCapture || !canReadClipboard) return;
+    if (!effectivePreferences.autoCapture) {
+      debugLog('capture', 'Auto capture disabled by preference');
+      return;
+    }
+    if (!canReadClipboard) {
+      debugLog('capture', 'Auto capture waiting for permission', { permissionState });
+      return;
+    }
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    debugLog('capture', 'Starting auto capture polling', {
+      intervalSec: effectivePreferences.captureIntervalSec,
+      permissionState
+    });
     pollTimerRef.current = window.setInterval(() => {
       if (!document.hidden) {
+        debugLog('capture', 'Auto capture poll tick');
         captureClipboard();
+      } else {
+        debugLog('capture', 'Auto capture poll skipped: document hidden');
       }
     }, effectivePreferences.captureIntervalSec * 1000);
 
     return () => {
+      debugLog('capture', 'Stopping auto capture polling');
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     };
-  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture, effectivePreferences.captureIntervalSec]);
+  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture, effectivePreferences.captureIntervalSec, permissionState]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture || !canReadClipboard) return;
 
     const onVisibilityChange = () => {
       if (!document.hidden) {
+        debugLog('capture', 'Visibility restored, attempting capture');
         captureClipboard();
       }
     };
 
     const onFocus = () => {
+      debugLog('capture', 'Window focus, attempting capture');
       captureClipboard();
     };
 
@@ -305,6 +336,15 @@ export default function ClipboardAppProV2() {
       window.removeEventListener('focus', onFocus);
     };
   }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture]);
+
+  useEffect(() => {
+    if (!isDebugLoggingEnabled()) return;
+    debugLog('capture', 'Capture capability snapshot', {
+      autoCapture: effectivePreferences.autoCapture,
+      canReadClipboard,
+      permissionState
+    });
+  }, [canReadClipboard, effectivePreferences.autoCapture, permissionState]);
 
   useEffect(
     () => () => {

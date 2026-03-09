@@ -17,6 +17,7 @@ import {
   removeLocalShadow,
   upsertLocalShadow
 } from '../services/clipboardSyncService';
+import { debugLog, debugWarn } from '../services/debugLogger';
 
 function nowIso() {
   return new Date().toISOString();
@@ -82,10 +83,22 @@ export function useClipboardSync(user, options = {}) {
   }, [setOutbox]);
 
   const flushOutbox = useCallback(async (reason = 'manual') => {
-    if (!user?.uid || !isOnline || flushInFlightRef.current) return;
+    if (!user?.uid) {
+      debugLog('sync', 'Skipping flush: no authenticated user', { reason });
+      return;
+    }
+    if (!isOnline) {
+      debugLog('sync', 'Skipping flush: offline', { reason, outboxSize: outbox.length });
+      return;
+    }
+    if (flushInFlightRef.current) {
+      debugLog('sync', 'Skipping flush: already in flight', { reason, outboxSize: outbox.length });
+      return;
+    }
     flushInFlightRef.current = true;
     setIsSyncing(true);
     updateSyncMeta({ backendState: 'syncing' });
+    debugLog('sync', 'Flush started', { reason, outboxSize: outbox.length, userUid: user.uid });
 
     try {
       const current = [...outbox].sort(
@@ -93,9 +106,20 @@ export function useClipboardSync(user, options = {}) {
       );
 
       for (const entry of current) {
-        if (new Date(entry.nextRetryAt || 0).getTime() > Date.now()) continue;
+        if (new Date(entry.nextRetryAt || 0).getTime() > Date.now()) {
+          debugLog('sync', 'Skipping queued mutation until retry window', {
+            mutationId: entry.mutationId,
+            nextRetryAt: entry.nextRetryAt
+          });
+          continue;
+        }
 
         try {
+          debugLog('sync', 'Processing mutation', {
+            mutationId: entry.mutationId,
+            itemId: entry.itemId,
+            operation: entry.operation
+          });
           if (entry.operation === 'delete') {
             await deleteCloudItem(entry.itemId);
             setLocalShadows((prev) => removeLocalShadow(prev, entry.itemId));
@@ -130,8 +154,19 @@ export function useClipboardSync(user, options = {}) {
             lastError: '',
             backendState: 'connected'
           });
+          debugLog('sync', 'Mutation synced', {
+            mutationId: entry.mutationId,
+            itemId: entry.itemId,
+            operation: entry.operation
+          });
         } catch (error) {
           const described = describeCloudError(error);
+          debugWarn('sync', 'Mutation failed', {
+            mutationId: entry.mutationId,
+            itemId: entry.itemId,
+            operation: entry.operation,
+            error: described
+          });
           setOutbox((prev) =>
             prev.map((value) =>
               value.mutationId === entry.mutationId ? markMutationFailed(value, described) : value
@@ -162,6 +197,11 @@ export function useClipboardSync(user, options = {}) {
       if (reason !== 'listener-retry' && outbox.length === 0) {
         updateSyncMeta({ backendState: 'connected' });
       }
+      debugLog('sync', 'Flush finished', {
+        reason,
+        remainingOutboxSize: outbox.length,
+        backendState: reason !== 'listener-retry' && outbox.length === 0 ? 'connected' : syncMeta.backendState
+      });
     }
   }, [
     cloudItems,
@@ -170,6 +210,7 @@ export function useClipboardSync(user, options = {}) {
     persistShadow,
     setLocalShadows,
     setOutbox,
+    syncMeta.backendState,
     updateSyncMeta,
     user
   ]);
@@ -185,6 +226,11 @@ export function useClipboardSync(user, options = {}) {
     });
     persistShadow(nextItem);
     enqueueMutation('upsert', nextItem);
+    debugLog('sync', 'Queued upsert mutation', {
+      itemId: nextItem.id,
+      contentType: nextItem.contentType,
+      syncState: nextItem.syncState
+    });
     return nextItem;
   }, [enqueueMutation, isOnline, persistShadow, user?.email, user?.uid]);
 
@@ -261,6 +307,7 @@ export function useClipboardSync(user, options = {}) {
         listenerState: 'idle',
         backendState: 'signed-out'
       });
+      debugLog('sync', 'Listener idle: signed out');
       return () => {};
     }
 
@@ -268,12 +315,17 @@ export function useClipboardSync(user, options = {}) {
       listenerState: 'connecting',
       backendState: 'connecting'
     });
+    debugLog('sync', 'Subscribing to cloud clipboard listener', {
+      userUid: user.uid,
+      email: user.email || ''
+    });
 
     const stop = watchAccessibleClipboardItems(
       user,
       (items) => {
         setCloudItems(items);
         updateSyncMeta({ listenerState: 'active', backendState: 'connected' });
+        debugLog('sync', 'Listener received items', { count: items.length });
         if (!bootstrappedRef.current) {
           bootstrappedRef.current = true;
           setIsHydrated(true);
@@ -281,6 +333,7 @@ export function useClipboardSync(user, options = {}) {
       },
       (error) => {
         const described = describeCloudError(error);
+        debugWarn('sync', 'Listener failed', described);
         updateSyncMeta({
           listenerState: 'error',
           backendState: 'failed',
@@ -288,7 +341,10 @@ export function useClipboardSync(user, options = {}) {
         });
         if (!bootstrappedRef.current) setIsHydrated(true);
       },
-      (state) => updateSyncMeta(state)
+      (state) => {
+        debugLog('sync', 'Listener state changed', state);
+        updateSyncMeta(state);
+      }
     );
 
     return () => stop();

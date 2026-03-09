@@ -22,12 +22,15 @@ describe('ClipboardEngine', () => {
             configurable: true
         });
 
-        globalThis.crypto = {
+        Object.defineProperty(globalThis, 'crypto', {
+            value: {
             randomUUID: vi.fn().mockReturnValue('id-1'),
             subtle: {
                 digest: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]).buffer)
             }
-        };
+            },
+            configurable: true
+        });
 
         globalThis.TextEncoder = class {
             encode(value) {
