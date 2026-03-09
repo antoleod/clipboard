@@ -11,13 +11,10 @@ import {
   SYNC_STATES,
   buildDiagnosticsSnapshot,
   buildSyncItem,
-  createOutboxEntry,
-  markMutationFailed,
   mergeSyncItems,
   removeLocalShadow,
   upsertLocalShadow
 } from '../services/clipboardSyncService';
-import { debugLog, debugWarn } from '../services/debugLogger';
 
 function nowIso() {
   return new Date().toISOString();
@@ -26,7 +23,6 @@ function nowIso() {
 export function useClipboardSync(user, options = {}) {
   const [cloudItems, setCloudItems] = useState([]);
   const [localShadows, setLocalShadows] = useLocalStorage('clipboard-vault-sync-local', []);
-  const [outbox, setOutbox] = useLocalStorage('clipboard-vault-sync-outbox', []);
   const [syncMeta, setSyncMeta] = useLocalStorage('clipboard-vault-sync-meta', {
     lastSyncAt: '',
     lastError: '',
@@ -45,8 +41,21 @@ export function useClipboardSync(user, options = {}) {
   );
 
   const pendingCount = useMemo(
-    () => outbox.filter((entry) => entry.operation !== 'delete').length,
-    [outbox]
+    () => localShadows.filter((item) => item.pendingSync && !item.deleted).length,
+    [localShadows]
+  );
+
+  const outbox = useMemo(
+    () =>
+      localShadows
+        .filter((item) => item.pendingSync || item.deleted)
+        .map((item) => ({
+          mutationId: `${item.deleted ? 'delete' : 'upsert'}-${item.id}`,
+          itemId: item.id,
+          operation: item.deleted ? 'delete' : 'upsert',
+          payload: item
+        })),
+    [localShadows]
   );
 
   const diagnostics = useMemo(
@@ -73,108 +82,75 @@ export function useClipboardSync(user, options = {}) {
     setLocalShadows((prev) => upsertLocalShadow(prev, item));
   }, [setLocalShadows]);
 
-  const enqueueMutation = useCallback((operation, item) => {
-    const entry = createOutboxEntry(operation, item);
-    setOutbox((prev) => {
-      const filtered = prev.filter((value) => !(value.itemId === entry.itemId && value.operation === operation));
-      return [entry, ...filtered];
+  const syncShadow = useCallback(async (entry) => {
+    if (!user?.uid || !isOnline) return false;
+
+    if (entry.deleted) {
+      await deleteCloudItem(entry.id);
+      setLocalShadows((prev) => removeLocalShadow(prev, entry.id));
+      return true;
+    }
+
+    const syncingItem = buildSyncItem({
+      ...entry,
+      ownerId: user.uid,
+      ownerEmail: user.email,
+      syncState: SYNC_STATES.SYNCING,
+      pendingSync: true,
+      lastSyncError: ''
     });
-    return entry;
-  }, [setOutbox]);
+
+    persistShadow(syncingItem);
+
+    if (cloudItems.some((item) => item.id === syncingItem.id)) {
+      await updateCloudItem(user, syncingItem.id, {
+        ...syncingItem,
+        syncState: SYNC_STATES.SYNCED,
+        pendingSync: false,
+        lastSyncError: ''
+      });
+    } else {
+      await createCloudItem(
+        user,
+        {
+          ...syncingItem,
+          syncState: SYNC_STATES.SYNCED,
+          pendingSync: false,
+          lastSyncError: ''
+        },
+        { visibility: syncingItem.visibility || 'personal' }
+      );
+    }
+
+    setLocalShadows((prev) => removeLocalShadow(prev, syncingItem.id));
+    return true;
+  }, [cloudItems, isOnline, persistShadow, setLocalShadows, user]);
 
   const flushOutbox = useCallback(async (reason = 'manual') => {
-    if (!user?.uid) {
-      debugLog('sync', 'Skipping flush: no authenticated user', { reason });
-      return;
-    }
-    if (!isOnline) {
-      debugLog('sync', 'Skipping flush: offline', { reason, outboxSize: outbox.length });
-      return;
-    }
-    if (flushInFlightRef.current) {
-      debugLog('sync', 'Skipping flush: already in flight', { reason, outboxSize: outbox.length });
-      return;
-    }
+    if (!user?.uid || !isOnline || flushInFlightRef.current) return;
     flushInFlightRef.current = true;
     setIsSyncing(true);
     updateSyncMeta({ backendState: 'syncing' });
-    debugLog('sync', 'Flush started', { reason, outboxSize: outbox.length, userUid: user.uid });
 
     try {
-      const current = [...outbox].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      const current = [...localShadows].sort(
+        (a, b) => new Date(a.updatedAt || a.createdAt).getTime() - new Date(b.updatedAt || b.createdAt).getTime()
       );
 
-      for (const entry of current) {
-        if (new Date(entry.nextRetryAt || 0).getTime() > Date.now()) {
-          debugLog('sync', 'Skipping queued mutation until retry window', {
-            mutationId: entry.mutationId,
-            nextRetryAt: entry.nextRetryAt
-          });
-          continue;
-        }
-
+      for (const shadow of current) {
+        if (!shadow.pendingSync && !shadow.deleted) continue;
         try {
-          debugLog('sync', 'Processing mutation', {
-            mutationId: entry.mutationId,
-            itemId: entry.itemId,
-            operation: entry.operation
-          });
-          if (entry.operation === 'delete') {
-            await deleteCloudItem(entry.itemId);
-            setLocalShadows((prev) => removeLocalShadow(prev, entry.itemId));
-          } else if (entry.operation === 'upsert') {
-            const syncingItem = buildSyncItem({
-              ...entry.payload,
-              syncState: SYNC_STATES.SYNCING,
-              pendingSync: true,
-              lastSyncError: ''
-            });
-            persistShadow(syncingItem);
-
-            const cloudPayload = {
-              ...syncingItem,
-              syncState: SYNC_STATES.SYNCED,
-              pendingSync: false,
-              lastSyncError: ''
-            };
-
-            if (cloudItems.some((item) => item.id === syncingItem.id)) {
-              await updateCloudItem(user, syncingItem.id, cloudPayload);
-            } else {
-              await createCloudItem(user, cloudPayload, { visibility: syncingItem.visibility || 'personal' });
-            }
-
-            setLocalShadows((prev) => removeLocalShadow(prev, syncingItem.id));
-          }
-
-          setOutbox((prev) => prev.filter((value) => value.mutationId !== entry.mutationId));
+          await syncShadow(shadow);
           updateSyncMeta({
             lastSyncAt: nowIso(),
             lastError: '',
             backendState: 'connected'
           });
-          debugLog('sync', 'Mutation synced', {
-            mutationId: entry.mutationId,
-            itemId: entry.itemId,
-            operation: entry.operation
-          });
         } catch (error) {
           const described = describeCloudError(error);
-          debugWarn('sync', 'Mutation failed', {
-            mutationId: entry.mutationId,
-            itemId: entry.itemId,
-            operation: entry.operation,
-            error: described
-          });
-          setOutbox((prev) =>
-            prev.map((value) =>
-              value.mutationId === entry.mutationId ? markMutationFailed(value, described) : value
-            )
-          );
           setLocalShadows((prev) =>
             prev.map((item) =>
-              item.id === entry.itemId
+              item.id === shadow.id
                 ? {
                     ...item,
                     syncState: SYNC_STATES.ERROR,
@@ -194,23 +170,15 @@ export function useClipboardSync(user, options = {}) {
     } finally {
       flushInFlightRef.current = false;
       setIsSyncing(false);
-      if (reason !== 'listener-retry' && outbox.length === 0) {
+      if (reason !== 'listener-retry') {
         updateSyncMeta({ backendState: 'connected' });
       }
-      debugLog('sync', 'Flush finished', {
-        reason,
-        remainingOutboxSize: outbox.length,
-        backendState: reason !== 'listener-retry' && outbox.length === 0 ? 'connected' : syncMeta.backendState
-      });
     }
   }, [
-    cloudItems,
     isOnline,
-    outbox,
-    persistShadow,
+    localShadows,
     setLocalShadows,
-    setOutbox,
-    syncMeta.backendState,
+    syncShadow,
     updateSyncMeta,
     user
   ]);
@@ -225,14 +193,8 @@ export function useClipboardSync(user, options = {}) {
       lastSyncError: ''
     });
     persistShadow(nextItem);
-    enqueueMutation('upsert', nextItem);
-    debugLog('sync', 'Queued upsert mutation', {
-      itemId: nextItem.id,
-      contentType: nextItem.contentType,
-      syncState: nextItem.syncState
-    });
     return nextItem;
-  }, [enqueueMutation, isOnline, persistShadow, user?.email, user?.uid]);
+  }, [isOnline, persistShadow, user?.email, user?.uid]);
 
   const saveItem = useCallback(async (rawItem) => {
     const item = queueUpsert(rawItem);
@@ -255,11 +217,10 @@ export function useClipboardSync(user, options = {}) {
       syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
       pendingSync: true
     });
-    enqueueMutation('upsert', nextItem);
     if (isOnline) {
       await flushOutbox('update');
     }
-  }, [enqueueMutation, flushOutbox, isOnline, persistShadow, user?.email, user?.uid]);
+  }, [flushOutbox, isOnline, persistShadow, user?.email, user?.uid]);
 
   const deleteItem = useCallback(async (item) => {
     if (!item?.id) return;
@@ -272,22 +233,22 @@ export function useClipboardSync(user, options = {}) {
         updatedAt: nowIso()
       })
     );
-    enqueueMutation('delete', { id: item.id });
     if (isOnline) {
       await flushOutbox('delete');
     }
-  }, [enqueueMutation, flushOutbox, isOnline, setLocalShadows]);
+  }, [flushOutbox, isOnline, setLocalShadows]);
 
   const retryFailed = useCallback(async () => {
-    setOutbox((prev) =>
-      prev.map((entry) => ({
-        ...entry,
-        nextRetryAt: nowIso(),
+    setLocalShadows((prev) =>
+      prev.map((item) => ({
+        ...item,
+        pendingSync: true,
+        syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
         updatedAt: nowIso()
       }))
     );
     await flushOutbox('retry');
-  }, [flushOutbox, setOutbox]);
+  }, [flushOutbox, isOnline, setLocalShadows]);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -307,7 +268,7 @@ export function useClipboardSync(user, options = {}) {
         listenerState: 'idle',
         backendState: 'signed-out'
       });
-      debugLog('sync', 'Listener idle: signed out');
+      bootstrappedRef.current = false;
       return () => {};
     }
 
@@ -315,17 +276,12 @@ export function useClipboardSync(user, options = {}) {
       listenerState: 'connecting',
       backendState: 'connecting'
     });
-    debugLog('sync', 'Subscribing to cloud clipboard listener', {
-      userUid: user.uid,
-      email: user.email || ''
-    });
 
     const stop = watchAccessibleClipboardItems(
       user,
       (items) => {
         setCloudItems(items);
         updateSyncMeta({ listenerState: 'active', backendState: 'connected' });
-        debugLog('sync', 'Listener received items', { count: items.length });
         if (!bootstrappedRef.current) {
           bootstrappedRef.current = true;
           setIsHydrated(true);
@@ -333,7 +289,6 @@ export function useClipboardSync(user, options = {}) {
       },
       (error) => {
         const described = describeCloudError(error);
-        debugWarn('sync', 'Listener failed', described);
         updateSyncMeta({
           listenerState: 'error',
           backendState: 'failed',
@@ -341,10 +296,7 @@ export function useClipboardSync(user, options = {}) {
         });
         if (!bootstrappedRef.current) setIsHydrated(true);
       },
-      (state) => {
-        debugLog('sync', 'Listener state changed', state);
-        updateSyncMeta(state);
-      }
+      (state) => updateSyncMeta(state)
     );
 
     return () => stop();
@@ -361,7 +313,7 @@ export function useClipboardSync(user, options = {}) {
     if (options.autoSyncPending === false) return;
     if (!bootstrappedRef.current) return;
     flushOutbox('auto-online');
-  }, [flushOutbox, isOnline, options.autoSyncPending, outbox.length, user?.uid]);
+  }, [flushOutbox, isOnline, localShadows.length, options.autoSyncPending, user?.uid]);
 
   return {
     items: mergedItems,

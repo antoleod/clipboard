@@ -6,7 +6,6 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
   where
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -89,9 +88,12 @@ export async function updateCloudItem(user, itemId, updates = {}) {
   const patch = {
     ...updates,
     ...(updates.sharedWith ? { sharedWith: normalizeEmails(updates.sharedWith) } : {}),
+    ownerId: user.uid,
+    ownerEmail: user.email ?? '',
+    ownerName: user.displayName ?? '',
     updatedAt: serverTimestamp()
   };
-  await updateDoc(ref, patch);
+  await setDoc(ref, patch, { merge: true });
 }
 
 export async function deleteCloudItem(itemId) {
@@ -127,44 +129,17 @@ export function watchAccessibleClipboardItems(user, onItems, onError, onStateCha
   }
 
   const ownQ = query(collection(db, ITEMS_COLLECTION), where('ownerId', '==', user.uid));
-  const sharedEmail = (user.email || '').toLowerCase();
-  const sharedQ = query(collection(db, ITEMS_COLLECTION), where('sharedWith', 'array-contains', sharedEmail));
-
-  let ownItems = [];
-  let sharedItems = [];
-
-  function emit() {
-    const merged = new Map();
-    for (const item of ownItems) merged.set(item.id, item);
-    for (const item of sharedItems) {
-      merged.set(item.id, { ...item, scope: item.ownerId === user.uid ? 'synced' : 'shared' });
-    }
-    onItems(
-      [...merged.values()].sort(
-        (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
-      )
-    );
-  }
 
   const unsubOwn = onSnapshot(
     ownQ,
     (snap) => {
       onStateChange?.({ listenerState: 'active', backendState: 'connected' });
-      ownItems = snap.docs.map((d) => fromDoc(d, 'synced'));
-      emit();
-    },
-    (error) => {
-      onStateChange?.({ listenerState: 'error', backendState: 'failed' });
-      onError?.(error);
-    }
-  );
-
-  const unsubShared = onSnapshot(
-    sharedQ,
-    (snap) => {
-      onStateChange?.({ listenerState: 'active', backendState: 'connected' });
-      sharedItems = snap.docs.map((d) => fromDoc(d, 'shared'));
-      emit();
+      const items = snap.docs
+        .map((d) => fromDoc(d, 'synced'))
+        .sort(
+          (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+        );
+      onItems(items);
     },
     (error) => {
       onStateChange?.({ listenerState: 'error', backendState: 'failed' });
@@ -174,6 +149,5 @@ export function watchAccessibleClipboardItems(user, onItems, onError, onStateCha
 
   return () => {
     unsubOwn();
-    unsubShared();
   };
 }
