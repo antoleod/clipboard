@@ -298,6 +298,10 @@ export default function ClipboardAppProV2() {
       intervalSec: effectivePreferences.captureIntervalSec,
       permissionState
     });
+    if (!document.hidden) {
+      debugLog('capture', 'Triggering immediate capture at startup');
+      captureClipboard();
+    }
     pollTimerRef.current = window.setInterval(() => {
       if (!document.hidden) {
         debugLog('capture', 'Auto capture poll tick');
@@ -312,6 +316,25 @@ export default function ClipboardAppProV2() {
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     };
   }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture, effectivePreferences.captureIntervalSec, permissionState]);
+
+  useEffect(() => {
+    if (!effectivePreferences.autoCapture || !canReadClipboard) return;
+
+    const onClipboardEvent = (event) => {
+      debugLog('capture', 'Clipboard event detected, forcing immediate capture', {
+        type: event.type
+      });
+      captureClipboard();
+    };
+
+    document.addEventListener('copy', onClipboardEvent);
+    document.addEventListener('cut', onClipboardEvent);
+
+    return () => {
+      document.removeEventListener('copy', onClipboardEvent);
+      document.removeEventListener('cut', onClipboardEvent);
+    };
+  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture || !canReadClipboard) return;

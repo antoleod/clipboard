@@ -92,6 +92,37 @@ body {
     border-color: var(--accent);
 }
 
+:root {
+    scroll-behavior: smooth;
+}
+
+*,
+*::before,
+*::after {
+    transition: background-color var(--transition-speed), color var(--transition-speed), border-color var(--transition-speed);
+}
+
+.card {
+    will-change: transform, opacity;
+}
+
+.card,
+.chip,
+button,
+input,
+textarea {
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.1s !important;
+        animation-duration: 0.1s !important;
+    }
+}
+
 /* Scrollbar hiding for horizontal filters */
 .hide-scrollbar::-webkit-scrollbar {
     display: none;
