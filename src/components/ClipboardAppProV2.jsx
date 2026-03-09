@@ -284,6 +284,11 @@ export default function ClipboardAppProV2() {
     showToast('Note saved.');
   }, [captureSnapshot, manualText, showToast]);
 
+  const captureIntervalMs = useMemo(
+    () => Math.min(900, Math.max(300, effectivePreferences.captureIntervalSec * 1000)),
+    [effectivePreferences.captureIntervalSec]
+  );
+
   useEffect(() => {
     if (!effectivePreferences.autoCapture) {
       debugLog('capture', 'Auto capture disabled by preference');
@@ -295,29 +300,32 @@ export default function ClipboardAppProV2() {
     }
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     debugLog('capture', 'Starting auto capture polling', {
-      intervalSec: effectivePreferences.captureIntervalSec,
+      intervalMs: captureIntervalMs,
       permissionState
     });
-    if (!document.hidden) {
+    window.setTimeout(() => {
       debugLog('capture', 'Triggering immediate capture at startup');
-      window.setTimeout(() => {
-        captureClipboard();
-      }, 0);
-    }
+      captureClipboard();
+    }, 0);
+
     pollTimerRef.current = window.setInterval(() => {
-      if (!document.hidden) {
-        debugLog('capture', 'Auto capture poll tick');
-        captureClipboard();
-      } else {
-        debugLog('capture', 'Auto capture poll skipped: document hidden');
-      }
-    }, effectivePreferences.captureIntervalSec * 1000);
+      debugLog('capture', `Auto capture poll tick (interval ${captureIntervalMs}ms)`, {
+        hidden: document.hidden
+      });
+      captureClipboard();
+    }, captureIntervalMs);
 
     return () => {
       debugLog('capture', 'Stopping auto capture polling');
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     };
-  }, [canReadClipboard, captureClipboard, effectivePreferences.autoCapture, effectivePreferences.captureIntervalSec, permissionState]);
+  }, [
+    canReadClipboard,
+    captureClipboard,
+    effectivePreferences.autoCapture,
+    captureIntervalMs,
+    permissionState
+  ]);
 
   useEffect(() => {
     if (!effectivePreferences.autoCapture || !canReadClipboard) return;
