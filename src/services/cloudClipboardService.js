@@ -1,5 +1,4 @@
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -11,6 +10,7 @@ import {
   where
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { buildStableItemId, formatSyncError } from './clipboardSyncService';
 
 const ITEMS_COLLECTION = 'clipboardItems';
 const COLLECTIONS_COLLECTION = 'sharedCollections';
@@ -39,7 +39,9 @@ function fromDoc(snapshot, scopeFallback = 'synced') {
 
 function toCloudPayload(item, user, overrides = {}) {
   const usageCount = Number(item.usageCount ?? item.copyCount ?? 0);
+  const itemId = item.id || buildStableItemId(user.uid, item.contentHash);
   return {
+    id: itemId,
     content: item.content ?? '',
     preview: item.preview ?? '',
     kind: item.kind ?? 'text',
@@ -66,9 +68,19 @@ function toCloudPayload(item, user, overrides = {}) {
   };
 }
 
+export function getCloudItemId(user, item) {
+  return item.id || buildStableItemId(user.uid, item.contentHash || '');
+}
+
+export function describeCloudError(error) {
+  return formatSyncError(error);
+}
+
 export async function createCloudItem(user, item, overrides = {}) {
+  const itemId = getCloudItemId(user, item);
   const payload = toCloudPayload(item, user, overrides);
-  const ref = await addDoc(collection(db, ITEMS_COLLECTION), payload);
+  const ref = doc(db, ITEMS_COLLECTION, itemId);
+  await setDoc(ref, payload, { merge: true });
   return ref.id;
 }
 
@@ -107,9 +119,10 @@ export function buildShareLink(itemId) {
   return url.toString();
 }
 
-export function watchAccessibleClipboardItems(user, onItems, onError) {
+export function watchAccessibleClipboardItems(user, onItems, onError, onStateChange) {
   if (!user?.uid) {
     onItems([]);
+    onStateChange?.({ listenerState: 'idle', backendState: 'signed-out' });
     return () => {};
   }
 
@@ -136,19 +149,27 @@ export function watchAccessibleClipboardItems(user, onItems, onError) {
   const unsubOwn = onSnapshot(
     ownQ,
     (snap) => {
+      onStateChange?.({ listenerState: 'active', backendState: 'connected' });
       ownItems = snap.docs.map((d) => fromDoc(d, 'synced'));
       emit();
     },
-    (error) => onError?.(error)
+    (error) => {
+      onStateChange?.({ listenerState: 'error', backendState: 'failed' });
+      onError?.(error);
+    }
   );
 
   const unsubShared = onSnapshot(
     sharedQ,
     (snap) => {
+      onStateChange?.({ listenerState: 'active', backendState: 'connected' });
       sharedItems = snap.docs.map((d) => fromDoc(d, 'shared'));
       emit();
     },
-    (error) => onError?.(error)
+    (error) => {
+      onStateChange?.({ listenerState: 'error', backendState: 'failed' });
+      onError?.(error);
+    }
   );
 
   return () => {

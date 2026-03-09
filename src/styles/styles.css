@@ -366,6 +366,13 @@ textarea:focus-visible {
   gap: 0.58rem;
 }
 
+.app-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0.58rem;
+  align-items: start;
+}
+
 .footer-fixed {
   margin-top: 1rem;
   border: 1px solid var(--border-default);
@@ -383,9 +390,20 @@ textarea:focus-visible {
 }
 
 .footer-panel {
-  margin-top: 1rem;
-  padding-top: 1rem;
+  margin-top: 0.72rem;
+  padding-top: 0.72rem;
   border-top: 1px solid var(--border-default);
+}
+
+.footer-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.footer-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-content: start;
 }
 
 .panel-surface {
@@ -443,6 +461,34 @@ textarea:focus-visible {
   margin-top: 0.44rem;
   display: grid;
   grid-template-columns: 1fr 120px;
+  gap: 0.4rem;
+}
+
+.capture-row {
+  margin-top: 0.56rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.diagnostics-panel {
+  margin-top: 0.56rem;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
+  padding: 0.62rem;
+}
+
+.diagnostics-head,
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.4rem;
 }
 
@@ -660,17 +706,24 @@ pre {
   flex-wrap: wrap;
 }
 
+.item-error {
+  margin: 0.42rem 0 0;
+  color: var(--status-error);
+  font-size: 0.78rem;
+}
+
 .blur-sensitive {
   filter: blur(7px);
 }
 
 .settings-panel {
   position: relative;
+  min-height: 100%;
 }
 
 .close-settings,
 .settings-trigger {
-  display: none;
+  display: inline-flex;
 }
 
 .panel-block {
@@ -785,8 +838,8 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .settings-trigger {
-    display: inline-flex;
+  .app-grid {
+    grid-template-columns: 1fr;
   }
 
   .settings-panel {
@@ -857,5 +910,21 @@ pre {
   .header-actions .signout-button {
     flex: 1 1 auto;
     justify-content: center;
+  }
+
+  .footer-actions,
+  .capture-actions {
+    justify-content: stretch;
+  }
+
+  .footer-actions .btn,
+  .footer-actions .btn-strong,
+  .capture-actions .btn,
+  .capture-actions .btn-strong {
+    flex: 1 1 140px;
+  }
+
+  .footer-grid {
+    grid-template-columns: 1fr;
   }
 }
