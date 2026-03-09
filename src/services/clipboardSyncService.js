@@ -43,14 +43,17 @@ export function createOutboxEntry(operation, item, now = new Date().toISOString(
   };
 }
 
-export function buildSyncItem(rawItem, defaults = {}) {
+export function buildSyncItem(rawItem, defaults = {}, options = {}) {
+  const forceStableId = Boolean(options.forceStableId);
   const normalized = normalizeItem(rawItem, defaults);
   const normalizedText =
     normalized.kind === 'text'
       ? normalizeClipboardText(normalized.content)
       : `${normalized.kind}:${normalized.preview || normalized.content}`;
   const contentHash = normalized.contentHash || quickHashText(normalizedText);
-  const itemId = normalized.id || buildStableItemId(normalized.ownerId || defaults.ownerId, contentHash);
+  const ownerId = normalized.ownerId || defaults.ownerId || '';
+  const rawId = rawItem?.id ? String(rawItem.id) : '';
+  const itemId = forceStableId || !rawId ? buildStableItemId(ownerId, contentHash) : rawId;
 
   return normalizeItem(
     {

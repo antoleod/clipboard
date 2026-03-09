@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocalStorage } from './useLocalStorage';
 import {
   createCloudItem,
+  dedupeCloudItemsByContentHash,
   deleteCloudItem,
   describeCloudError,
-  updateCloudItem,
   watchAccessibleClipboardItems
 } from '../services/cloudClipboardService';
 import {
@@ -20,10 +19,15 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function legacyKeyFor(baseKey, userUid) {
+  return userUid ? `${baseKey}-${userUid}` : '';
+}
+
 export function useClipboardSync(user, options = {}) {
   const [cloudItems, setCloudItems] = useState([]);
-  const [localShadows, setLocalShadows] = useLocalStorage('clipboard-vault-sync-local', []);
-  const [syncMeta, setSyncMeta] = useLocalStorage('clipboard-vault-sync-meta', {
+  // In-memory only: no offline-persistent outbox. The source of truth is Firestore.
+  const [localShadows, setLocalShadows] = useState([]);
+  const [syncMeta, setSyncMeta] = useState({
     lastSyncAt: '',
     lastError: '',
     listenerState: 'idle',
@@ -35,6 +39,9 @@ export function useClipboardSync(user, options = {}) {
   const bootstrappedRef = useRef(false);
   const flushInFlightRef = useRef(false);
   const syncCooldownUntilRef = useRef(0);
+  const dedupeTimerRef = useRef(null);
+  const lastDedupeSignatureRef = useRef('');
+  const legacyCacheClearedRef = useRef(false);
 
   const mergedItems = useMemo(
     () => mergeSyncItems(cloudItems, localShadows),
@@ -99,33 +106,25 @@ export function useClipboardSync(user, options = {}) {
       syncState: SYNC_STATES.SYNCING,
       pendingSync: true,
       lastSyncError: ''
-    });
+    }, {}, { forceStableId: entry.scope === 'local' || entry.syncState === SYNC_STATES.LOCAL });
 
     persistShadow(syncingItem);
 
-    if (cloudItems.some((item) => item.id === syncingItem.id)) {
-      await updateCloudItem(user, syncingItem.id, {
+    // Upsert: setDoc(..., { merge: true }) keeps this idempotent and avoids duplicate docs.
+    await createCloudItem(
+      user,
+      {
         ...syncingItem,
         syncState: SYNC_STATES.SYNCED,
         pendingSync: false,
         lastSyncError: ''
-      });
-    } else {
-      await createCloudItem(
-        user,
-        {
-          ...syncingItem,
-          syncState: SYNC_STATES.SYNCED,
-          pendingSync: false,
-          lastSyncError: ''
-        },
-        { visibility: syncingItem.visibility || 'personal' }
-      );
-    }
+      },
+      { visibility: syncingItem.visibility || 'personal', scope: 'synced' }
+    );
 
     setLocalShadows((prev) => removeLocalShadow(prev, syncingItem.id));
     return true;
-  }, [cloudItems, isOnline, persistShadow, setLocalShadows, user]);
+  }, [isOnline, persistShadow, setLocalShadows, user]);
 
   const flushOutbox = useCallback(async (reason = 'manual') => {
     if (!user?.uid || !isOnline || flushInFlightRef.current) return;
@@ -160,7 +159,7 @@ export function useClipboardSync(user, options = {}) {
                 ? {
                     ...item,
                     syncState: SYNC_STATES.ERROR,
-                    pendingSync: true,
+                    pendingSync: false,
                     lastSyncError: described.message,
                     updatedAt: nowIso()
                   }
@@ -192,6 +191,12 @@ export function useClipboardSync(user, options = {}) {
   ]);
 
   const queueUpsert = useCallback((rawItem) => {
+    if (!isOnline) {
+      const message = 'Offline: sync is online-only. Reconnect to save.';
+      updateSyncMeta({ lastError: message, backendState: 'offline' });
+      throw new Error(message);
+    }
+    const shouldForceStableId = rawItem?.scope === 'local' || rawItem?.syncState === SYNC_STATES.LOCAL;
     const nextItem = buildSyncItem({
       ...rawItem,
       ownerId: user?.uid,
@@ -199,20 +204,47 @@ export function useClipboardSync(user, options = {}) {
       syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
       pendingSync: true,
       lastSyncError: ''
-    });
+    }, {}, { forceStableId: shouldForceStableId });
     persistShadow(nextItem);
     return nextItem;
-  }, [isOnline, persistShadow, user?.email, user?.uid]);
+  }, [isOnline, persistShadow, updateSyncMeta, user?.email, user?.uid]);
 
   const saveItem = useCallback(async (rawItem) => {
     const item = queueUpsert(rawItem);
-    if (isOnline) {
-      await flushOutbox('save');
+    setIsSyncing(true);
+    updateSyncMeta({ backendState: 'syncing' });
+    try {
+      await syncShadow(item);
+      updateSyncMeta({ lastSyncAt: nowIso(), lastError: '', backendState: 'connected' });
+    } catch (error) {
+      const described = describeCloudError(error);
+      setLocalShadows((prev) =>
+        prev.map((entry) =>
+          entry.id === item.id
+            ? {
+                ...entry,
+                syncState: SYNC_STATES.ERROR,
+                pendingSync: false,
+                lastSyncError: described.message,
+                updatedAt: nowIso()
+              }
+            : entry
+        )
+      );
+      updateSyncMeta({ lastError: described.message, backendState: 'degraded' });
+      throw error;
+    } finally {
+      setIsSyncing(false);
     }
     return item;
-  }, [flushOutbox, isOnline, queueUpsert]);
+  }, [queueUpsert, setLocalShadows, syncShadow, updateSyncMeta]);
 
   const updateItem = useCallback(async (item, patch) => {
+    if (!isOnline) {
+      const message = 'Offline: sync is online-only. Reconnect to update.';
+      updateSyncMeta({ lastError: message, backendState: 'offline' });
+      throw new Error(message);
+    }
     const nextItem = buildSyncItem({
       ...item,
       ...patch,
@@ -225,33 +257,71 @@ export function useClipboardSync(user, options = {}) {
       syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
       pendingSync: true
     });
-    if (isOnline) {
-      await flushOutbox('update');
+    setIsSyncing(true);
+    updateSyncMeta({ backendState: 'syncing' });
+    try {
+      await createCloudItem(user, nextItem, { visibility: nextItem.visibility || 'personal', scope: 'synced' });
+      setLocalShadows((prev) => removeLocalShadow(prev, nextItem.id));
+      updateSyncMeta({ lastSyncAt: nowIso(), lastError: '', backendState: 'connected' });
+    } catch (error) {
+      const described = describeCloudError(error);
+      setLocalShadows((prev) =>
+        prev.map((entry) =>
+          entry.id === nextItem.id
+            ? {
+                ...entry,
+                syncState: SYNC_STATES.ERROR,
+                pendingSync: false,
+                lastSyncError: described.message,
+                updatedAt: nowIso()
+              }
+            : entry
+        )
+      );
+      updateSyncMeta({ lastError: described.message, backendState: 'degraded' });
+      throw error;
+    } finally {
+      setIsSyncing(false);
     }
-  }, [flushOutbox, isOnline, persistShadow, user?.email, user?.uid]);
+  }, [isOnline, persistShadow, setLocalShadows, updateSyncMeta, user]);
 
   const deleteItem = useCallback(async (item) => {
     if (!item?.id) return;
-    setLocalShadows((prev) =>
-      upsertLocalShadow(prev, {
+    if (!isOnline) {
+      const message = 'Offline: sync is online-only. Reconnect to delete.';
+      updateSyncMeta({ lastError: message, backendState: 'offline' });
+      throw new Error(message);
+    }
+    setIsSyncing(true);
+    updateSyncMeta({ backendState: 'syncing' });
+    try {
+      await deleteCloudItem(item.id);
+      updateSyncMeta({ lastSyncAt: nowIso(), lastError: '', backendState: 'connected' });
+      setLocalShadows((prev) => removeLocalShadow(prev, item.id));
+    } catch (error) {
+      const described = describeCloudError(error);
+      updateSyncMeta({ lastError: described.message, backendState: 'degraded' });
+      persistShadow({
         ...item,
         deleted: true,
-        syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
-        pendingSync: true,
+        syncState: SYNC_STATES.ERROR,
+        pendingSync: false,
+        lastSyncError: described.message,
         updatedAt: nowIso()
-      })
-    );
-    if (isOnline) {
-      await flushOutbox('delete');
+      });
+      throw error;
+    } finally {
+      setIsSyncing(false);
     }
-  }, [flushOutbox, isOnline, setLocalShadows]);
+  }, [isOnline, persistShadow, setLocalShadows, updateSyncMeta]);
 
   const retryFailed = useCallback(async () => {
+    if (!isOnline) return;
     setLocalShadows((prev) =>
       prev.map((item) => ({
         ...item,
         pendingSync: true,
-        syncState: isOnline ? SYNC_STATES.SYNCING : SYNC_STATES.PENDING,
+        syncState: SYNC_STATES.SYNCING,
         updatedAt: nowIso()
       }))
     );
@@ -272,11 +342,13 @@ export function useClipboardSync(user, options = {}) {
   useEffect(() => {
     if (!user?.uid) {
       setCloudItems([]);
+      setLocalShadows([]);
       updateSyncMeta({
         listenerState: 'idle',
         backendState: 'signed-out'
       });
       bootstrappedRef.current = false;
+      legacyCacheClearedRef.current = false;
       return () => {};
     }
 
@@ -294,6 +366,23 @@ export function useClipboardSync(user, options = {}) {
           bootstrappedRef.current = true;
           setIsHydrated(true);
         }
+
+        if (options.dedupeCloud !== false) {
+          const counts = new Map();
+          for (const entry of items) {
+            if (!entry?.contentHash) continue;
+            counts.set(entry.contentHash, (counts.get(entry.contentHash) || 0) + 1);
+          }
+          const duplicates = [...counts.entries()].filter(([, count]) => count > 1).map(([hash]) => hash).sort();
+          const signature = `${user.uid}:${duplicates.join('|')}`;
+          if (duplicates.length && signature !== lastDedupeSignatureRef.current) {
+            lastDedupeSignatureRef.current = signature;
+            if (dedupeTimerRef.current) window.clearTimeout(dedupeTimerRef.current);
+            dedupeTimerRef.current = window.setTimeout(() => {
+              dedupeCloudItemsByContentHash(user, items).catch(() => {});
+            }, 1200);
+          }
+        }
       },
       (error) => {
         const described = describeCloudError(error);
@@ -308,13 +397,62 @@ export function useClipboardSync(user, options = {}) {
     );
 
     return () => stop();
-  }, [updateSyncMeta, user]);
+  }, [options.dedupeCloud, updateSyncMeta, user]);
 
   useEffect(() => {
     if (!isHydrated && (!user?.uid || !isOnline)) {
       setIsHydrated(true);
     }
   }, [isHydrated, isOnline, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    if (!isOnline) return;
+    if (legacyCacheClearedRef.current) return;
+
+    const keyLocal = legacyKeyFor('clipboard-vault-sync-local', user.uid);
+    const keyMeta = legacyKeyFor('clipboard-vault-sync-meta', user.uid);
+    const raw = typeof window !== 'undefined' ? window.localStorage?.getItem?.(keyLocal) : null;
+
+    const drain = async () => {
+      let legacy = [];
+      try {
+        legacy = raw ? JSON.parse(raw) : [];
+      } catch {
+        legacy = [];
+      }
+
+      if (Array.isArray(legacy) && legacy.length) {
+        const candidates = legacy.filter((entry) => entry && !entry.deleted);
+        await Promise.allSettled(
+          candidates.map((entry) =>
+            createCloudItem(
+              user,
+              {
+                ...buildSyncItem(entry, { ownerId: user.uid, ownerEmail: user.email }, { forceStableId: true }),
+                syncState: SYNC_STATES.SYNCED,
+                pendingSync: false,
+                lastSyncError: ''
+              },
+              { visibility: entry.visibility || 'personal', scope: 'synced' }
+            )
+          )
+        );
+      }
+    };
+
+    drain()
+      .catch(() => {})
+      .finally(() => {
+        try {
+          window.localStorage?.removeItem?.(keyLocal);
+          window.localStorage?.removeItem?.(keyMeta);
+        } catch {
+          // ignore
+        }
+        legacyCacheClearedRef.current = true;
+      });
+  }, [isOnline, user]);
 
   useEffect(() => {
     if (!user?.uid || !isOnline) return;

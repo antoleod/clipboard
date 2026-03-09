@@ -6,6 +6,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  writeBatch,
   where
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -98,6 +99,51 @@ export async function updateCloudItem(user, itemId, updates = {}) {
 
 export async function deleteCloudItem(itemId) {
   await deleteDoc(doc(db, ITEMS_COLLECTION, itemId));
+}
+
+export async function dedupeCloudItemsByContentHash(user, items = []) {
+  if (!user?.uid) return { removed: 0 };
+  const groups = new Map();
+
+  for (const item of items) {
+    if (!item?.contentHash) continue;
+    const key = String(item.contentHash);
+    const existing = groups.get(key);
+    if (existing) existing.push(item);
+    else groups.set(key, [item]);
+  }
+
+  const batch = writeBatch(db);
+  let removed = 0;
+  let operations = 0;
+
+  for (const [hash, group] of groups.entries()) {
+    if (group.length <= 1) continue;
+    const stableId = buildStableItemId(user.uid, hash);
+    const stableItem = group.find((candidate) => candidate.id === stableId);
+    const keep =
+      stableItem ||
+      group.reduce((best, candidate) => {
+        const bestTs = new Date(best.updatedAt || best.createdAt || 0).getTime();
+        const candidateTs = new Date(candidate.updatedAt || candidate.createdAt || 0).getTime();
+        return candidateTs >= bestTs ? candidate : best;
+      }, group[0]);
+
+    for (const candidate of group) {
+      if (!candidate?.id || candidate.id === keep.id) continue;
+      batch.delete(doc(db, ITEMS_COLLECTION, candidate.id));
+      removed += 1;
+      operations += 1;
+      if (operations >= 450) break;
+    }
+    if (operations >= 450) break;
+  }
+
+  if (operations > 0) {
+    await batch.commit();
+  }
+
+  return { removed };
 }
 
 export async function createSharedCollection(user, name, members = []) {
