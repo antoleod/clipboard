@@ -300,7 +300,9 @@ export default function ClipboardAppProV2() {
     });
     if (!document.hidden) {
       debugLog('capture', 'Triggering immediate capture at startup');
-      captureClipboard();
+      window.setTimeout(() => {
+        captureClipboard();
+      }, 0);
     }
     pollTimerRef.current = window.setInterval(() => {
       if (!document.hidden) {
